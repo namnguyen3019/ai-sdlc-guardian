@@ -50,7 +50,40 @@ class GuardianConfig(BaseModel):
     large_pr_files: int = 20
     untested_source_lines: int = 30
 
+    # --- AI analysis (Week 2) ---------------------------------------------
+    ai_enabled: bool = True
     bedrock_model_id: str = "anthropic.claude-sonnet-5"
+    bedrock_region: str = "us-east-1"
+    ai_max_tokens: int = 4096
+    ai_temperature: float = 0.0
+    ai_max_retries: int = 3
+
+    # Only this many characters of diff are sent to the model. Guardian
+    # analyzes the diff, never the repository, and truncates defensively so a
+    # huge PR cannot blow up latency or cost.
+    ai_max_diff_chars: int = 60_000
+
+    # Cache the static system prompt. Bedrock supports manual cache points;
+    # note the minimum cacheable prefix differs by model (Sonnet 1024 tokens,
+    # Haiku 4.5 4096), and an undersized prefix caches silently as zero.
+    ai_prompt_caching: bool = True
+
+    # Optional cost control: skip the model entirely on PRs that deterministic
+    # analysis already considers clearly low risk. Off by default so scoring
+    # semantics match the specified architecture unless explicitly enabled.
+    ai_escalation_gate: bool = False
+    ai_gate_max_deterministic_score: int = 20
+    ai_gate_max_churn: int = 100
+
+    # USD per million tokens, used for the estimated-cost metric only.
+    ai_price_per_mtok_input: float = 3.0
+    ai_price_per_mtok_output: float = 15.0
+    ai_price_per_mtok_cache_read: float = 0.30
+
+    # --- Storage / observability ------------------------------------------
+    dynamodb_table: str = "guardian-analyses"
+    reports_bucket: str = ""
+    metrics_namespace: str = "AiSdlcGuardian"
 
 
 def load_config(path: str | Path | None = None) -> GuardianConfig:

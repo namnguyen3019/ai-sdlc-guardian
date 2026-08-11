@@ -64,6 +64,23 @@ class AnalyzerFailure(BaseModel):
     error: str
 
 
+class AIUsage(BaseModel):
+    """Accounting for the AI analysis stage (present when AI was attempted)."""
+
+    model_id: str = ""
+    ran: bool = False
+    skipped_by_gate: bool = False
+    skip_reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    latency_ms: int = 0
+    estimated_cost_usd: float = 0.0
+    findings_rejected_ungrounded: int = 0
+    findings_rejected_malformed: int = 0
+
+
 class RiskReport(BaseModel):
     """Complete result of one pull-request analysis."""
 
@@ -85,4 +102,5 @@ class RiskReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     features: PRFeatures
     analyzer_failures: list[AnalyzerFailure] = Field(default_factory=list)
+    ai: AIUsage | None = None
     duration_ms: int = 0

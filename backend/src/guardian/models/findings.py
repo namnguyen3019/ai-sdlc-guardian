@@ -46,6 +46,7 @@ class Finding(BaseModel):
     file: str | None = None
     line: int | None = None
     rule: str
+    title: str | None = None
     reason: str
     recommendation: str
     evidence: str | None = None

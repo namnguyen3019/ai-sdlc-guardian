@@ -5,6 +5,7 @@ from guardian.models.features import PRFeatures
 from guardian.models.findings import Category, Finding, FindingSource, Severity
 from guardian.models.pr import ChangeType, DiffLine, FileChange, PRContext
 from guardian.models.report import (
+    AIUsage,
     AnalyzerFailure,
     CategoryScores,
     MergeRecommendation,
@@ -14,6 +15,7 @@ from guardian.models.report import (
 )
 
 __all__ = [
+    "AIUsage",
     "AnalyzerFailure",
     "Category",
     "CategoryScores",
