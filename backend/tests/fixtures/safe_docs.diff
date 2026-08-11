@@ -1,0 +1,32 @@
+diff --git a/README.md b/README.md
+index aaaaaaa..bbbbbbb 100644
+--- a/README.md
++++ b/README.md
+@@ -1,4 +1,6 @@
+ # Shop
+
++Improved setup instructions.
++
+ ## Install
+diff --git a/src/utils/format.py b/src/utils/format.py
+index ccccccc..ddddddd 100644
+--- a/src/utils/format.py
++++ b/src/utils/format.py
+@@ -1,3 +1,7 @@
+ """Formatting helpers."""
+
++def format_price(cents):
++    return f"${cents / 100:.2f}"
++
+
+diff --git a/tests/test_format.py b/tests/test_format.py
+new file mode 100644
+index 0000000..eeeeeee
+--- /dev/null
++++ b/tests/test_format.py
+@@ -0,0 +1,5 @@
++from src.utils.format import format_price
++
++
++def test_format_price():
++    assert format_price(150) == "$1.50"

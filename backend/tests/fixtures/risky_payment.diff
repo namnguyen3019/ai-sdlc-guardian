@@ -1,0 +1,40 @@
+diff --git a/src/payment/payment_service.py b/src/payment/payment_service.py
+index 1111111..2222222 100644
+--- a/src/payment/payment_service.py
++++ b/src/payment/payment_service.py
+@@ -80,9 +80,8 @@ class PaymentService:
+     def get_payment(self, user_id):
+-        query = "SELECT * FROM payments WHERE user_id = ?"
+-        return self.db.execute(query, (user_id,))
++        query = f"SELECT * FROM payments WHERE user_id = {user_id}"
++        return self.db.execute(query)
+
+     def charge(self, amount):
+-        try:
+-            return self.gateway.charge(amount)
+-        except GatewayError:
+-            raise PaymentFailed()
++        api_key = "sk_live_51HxTestSecretKey12345"
++        return requests.post(GATEWAY_URL, json={"amount": amount},
++                             headers={"X-Key": api_key}, verify=False)
+diff --git a/src/auth/login.py b/src/auth/login.py
+index 3333333..4444444 100644
+--- a/src/auth/login.py
++++ b/src/auth/login.py
+@@ -10,6 +10,7 @@ def login(username, password):
+     user = find_user(username)
+-    if not verify_password(user, password):
+-        raise AuthError()
++    if user is None:
++        raise AuthError()
++    session = create_session(user, skip_mfa=True)
+     return session
+diff --git a/requirements.txt b/requirements.txt
+index 5555555..6666666 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,5 @@
+ flask==2.3.0
+ requests==2.31.0
++left-pad-py>=1.0
++totally-new-lib==0.0.1
