@@ -1,0 +1,8 @@
+{
+  "repository": "acme/shop",
+  "pr_number": 42,
+  "title": "Refactor payment charge path",
+  "author": "dev-a",
+  "base_sha": "abc1234",
+  "head_sha": "def5678"
+}
