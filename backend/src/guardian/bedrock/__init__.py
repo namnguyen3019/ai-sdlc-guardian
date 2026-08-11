@@ -1,8 +1,13 @@
-"""Amazon Bedrock AI analysis (implemented in Week 2).
+"""AI analysis through a provider abstraction (Amazon Bedrock by default).
 
-Week 1 defines only the interface so the pipeline shape is stable: the AI
-analyzer is just another ``BaseAnalyzer`` whose findings land in the
-``ai`` category and are scored by the deterministic engine — the LLM never
-decides the final score. Repository code passed to the model is untrusted
-input; instructions found inside code or comments must never be followed.
+The LLM is one more analyzer: it consumes the diff plus deterministic
+findings and returns evidence-grounded ``Finding`` objects in the ``ai``
+category. Repository code is untrusted input — instructions found inside it
+are never followed, and findings whose evidence is absent from the diff are
+discarded by the parser, not merely discouraged by the prompt.
 """
+
+from guardian.bedrock.analyzer import AIAnalyzer
+from guardian.bedrock.provider import LLMError, LLMProvider, LLMResponse, NullProvider, StubProvider
+
+__all__ = ["AIAnalyzer", "LLMError", "LLMProvider", "LLMResponse", "NullProvider", "StubProvider"]
