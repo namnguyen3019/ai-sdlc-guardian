@@ -7,10 +7,11 @@ Guardian analyzes every pull request before merge and produces an explainable
 deterministic static analysis with generative AI review through Amazon
 Bedrock.
 
-> **Status: Week 1 (v0.1)** — the local analysis engine is complete: diff
-> parsing, five deterministic analyzers, the explainable scoring engine, and a
-> CLI. Bedrock AI analysis, the AWS workflow, GitHub automation, the benchmark
-> and the dashboard land in Weeks 2–4 (see [Roadmap](#roadmap)).
+> **Status: Week 2 (v0.2)** — the analysis engine (Week 1) plus the AI and
+> AWS layers are complete: the Bedrock analyzer with evidence-grounded
+> findings, the Step Functions workflow, Lambda handlers, DynamoDB/S3
+> persistence, and CloudWatch metrics. GitHub webhook automation, the
+> benchmark, and the dashboard land in Weeks 3–4 (see [Roadmap](#roadmap)).
 
 ## 1. Problem
 
@@ -77,6 +78,21 @@ Details: [docs/architecture.md](docs/architecture.md).
 - **Explainable scoring** — a confidence-weighted, severity-based 0–100 score
   per dimension, combined with configurable weights. Every score traces back
   to concrete findings; the report says *why*.
+- **AI review via Amazon Bedrock** — the diff plus deterministic findings go
+  to a configurable Claude model (Converse API) acting as a senior reviewer.
+  Every AI finding must quote evidence that Guardian verifies against the
+  actual diff — ungrounded findings are discarded by the parser, not merely
+  discouraged by the prompt. The model never sets the score.
+- **Prompt-injection hardened** — the diff travels inside explicit untrusted
+  markers; instructions embedded in code or comments are treated as a
+  security finding, never followed.
+- **Serverless workflow** — Step Functions orchestrates analyze/store Lambdas
+  (ARM64) with retries, timeouts, and failure isolation; metadata lands in
+  DynamoDB, full reports in S3; low-cardinality CloudWatch metrics and a
+  workflow-failure alarm.
+- **Cost controls** — optional escalation gate (skip the model on clearly
+  low-risk PRs, off by default), prompt caching, per-analysis cost estimates
+  in reports and metrics.
 - **CI gate** — `guardian analyze --fail-on HIGH` exits non-zero at or above
   the chosen risk level.
 - **Structured output** — Markdown for humans/PR comments, JSON for machines.
@@ -106,15 +122,30 @@ guardian analyze --diff examples/risky-payment-pr.diff --meta examples/risky-pay
 
 ## 6. AWS deployment
 
-Week 1 ships the CDK foundation (DynamoDB metadata table + encrypted S3
-report bucket). The full serverless workflow arrives in Week 2.
+The CDK app deploys the full Week 2 workflow: Step Functions, analyze/store
+Lambdas, DynamoDB, S3, CloudWatch metrics and alarm.
 
 ```bash
 cd infrastructure
 npm install
 npm run build       # typecheck
+npx cdk synth       # works without Docker (host pip cross-bundles the Lambda)
 npx cdk deploy      # requires AWS credentials + CDK bootstrap
 ```
+
+Prerequisite: enable the configured Claude model in the Bedrock console for
+your region (default `anthropic.claude-sonnet-5`, overridable via the
+`bedrockModelId` stack prop or `GUARDIAN_BEDROCK_MODEL_ID`).
+
+Run an analysis through AWS by starting an execution:
+
+```bash
+aws stepfunctions start-execution --state-machine-arn <StateMachineArn> \
+  --input '{"repository":"acme/shop","pr_number":42,"diff":"'"$(git diff main...HEAD | sed 's/"/\\"/g')"'"}'
+```
+
+(or upload the diff to `artifacts/` in the reports bucket and pass
+`diff_s3_key` instead — required for large diffs).
 
 ## 7. GitHub integration
 
@@ -178,7 +209,7 @@ Nothing in this repository reports fabricated numbers.
 | Week | Deliverable | Status |
 |---|---|---|
 | 1 | Local engine: parser, deterministic analyzers, scoring, CLI, tests, CDK foundation | ✅ done |
-| 2 | Bedrock AI analyzer, Step Functions workflow, Lambda, DynamoDB/S3 persistence, CloudWatch | ⏳ |
+| 2 | Bedrock AI analyzer, Step Functions workflow, Lambda, DynamoDB/S3 persistence, CloudWatch | ✅ done |
 | 3 | GitHub webhook + auto-updating PR comments, Secrets Manager, retries, monitoring | ⏳ |
 | 4 | Benchmark framework + dataset, React dashboard, docs, v1.0 | ⏳ |
 
