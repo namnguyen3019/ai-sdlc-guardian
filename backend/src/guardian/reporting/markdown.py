@@ -15,8 +15,9 @@ def _finding_block(index: int, finding: Finding) -> str:
     location = finding.file or "(PR-wide)"
     if finding.line:
         location += f":{finding.line}"
+    heading = finding.rule if not finding.title else f"{finding.rule}: {finding.title}"
     lines = [
-        f"**{index}. [{finding.severity.value}] {finding.rule}** — `{location}`",
+        f"**{index}. [{finding.severity.value}] {heading}** — `{location}`",
         "",
         finding.reason,
         "",
@@ -71,6 +72,14 @@ def render_markdown(report: RiskReport) -> str:
     if report.analyzer_failures:
         out += ["", "> ⚠️ Some analyzers failed and were skipped: "
                 + ", ".join(f.analyzer for f in report.analyzer_failures)]
+
+    if report.ai is not None:
+        if report.ai.ran:
+            out += ["", f"*AI review: `{report.ai.model_id}` · "
+                    f"{report.ai.input_tokens} in / {report.ai.output_tokens} out tokens · "
+                    f"~${report.ai.estimated_cost_usd:.4f} · {report.ai.latency_ms} ms*"]
+        elif report.ai.skipped_by_gate:
+            out += ["", f"*AI review skipped by escalation gate ({report.ai.skip_reason}).*"]
 
     out += [
         "",
