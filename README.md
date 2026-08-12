@@ -7,11 +7,11 @@ Guardian analyzes every pull request before merge and produces an explainable
 deterministic static analysis with generative AI review through Amazon
 Bedrock.
 
-> **Status: Week 2 (v0.2)** — the analysis engine (Week 1) plus the AI and
-> AWS layers are complete: the Bedrock analyzer with evidence-grounded
-> findings, the Step Functions workflow, Lambda handlers, DynamoDB/S3
-> persistence, and CloudWatch metrics. GitHub webhook automation, the
-> benchmark, and the dashboard land in Weeks 3–4 (see [Roadmap](#roadmap)).
+> **Status: v0.2 — analysis engine and AWS platform complete, GitHub
+> automation next.** Local/CI analysis works today via the CLI; an AWS-hosted
+> analysis works today via Step Functions. Webhook-driven PR comments, the
+> benchmark, and the dashboard are still ahead. Full detail:
+> [§12 Project status & roadmap](#12-project-status--roadmap).
 
 ## 1. Problem
 
@@ -59,7 +59,7 @@ flowchart LR
     F --> A3[Complexity]
     F --> A4[Change impact]
     F --> A5[Dependency]
-    F -.Week 2.-> AI[Bedrock AI analyzer]
+    F --> AI[Bedrock AI analyzer]
     A1 & A2 & A3 & A4 & A5 & AI --> S[Risk scoring engine]
     S --> R[Explainable risk report]
 ```
@@ -104,7 +104,7 @@ git clone https://github.com/your-org/ai-sdlc-guardian.git
 cd ai-sdlc-guardian/backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest            # 70 tests, ~98% coverage of the engine
+pytest            # 106 tests, ~98% coverage; all AWS/Bedrock calls mocked
 ```
 
 Analyze a PR diff locally:
@@ -204,14 +204,73 @@ Nothing in this repository reports fabricated numbers.
   source is not persisted. Report artifacts expire after 90 days by default.
 - See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
 
-## 12. Roadmap
+## 12. Project status & roadmap
 
-| Week | Deliverable | Status |
+### Where the project stands (v0.2)
+
+**Works today**
+
+- Full local/CI analysis via the `guardian` CLI: diff parsing, 28
+  deterministic rules across 5 analyzers, explainable 0–100 scoring,
+  Markdown/JSON reports, `--fail-on` merge gate.
+- Full AWS-hosted analysis: Step Functions workflow → analyze/store Lambdas →
+  Bedrock AI review (evidence-grounded, prompt-injection hardened) →
+  DynamoDB metadata + S3 reports + CloudWatch metrics and alarm. Deployable
+  with `cdk deploy`; synth verified without Docker.
+- Cost controls: prompt caching, per-analysis cost estimates, and an
+  optional deterministic escalation gate (off by default).
+- 106 tests, ~98% coverage; CI enforces an 80% floor. All AWS and model
+  calls are mocked or stub-driven — no test touches the network.
+
+**Not built yet**
+
+- No GitHub webhook: AWS analyses are started manually (CLI/`start-execution`).
+- No PR comments posted automatically.
+- No benchmark data — **all evaluation results are pending**; nothing here
+  reports fabricated numbers.
+- No dashboard (`frontend/` is a placeholder).
+
+### Delivery plan
+
+| Phase | Deliverable | Status |
 |---|---|---|
-| 1 | Local engine: parser, deterministic analyzers, scoring, CLI, tests, CDK foundation | ✅ done |
-| 2 | Bedrock AI analyzer, Step Functions workflow, Lambda, DynamoDB/S3 persistence, CloudWatch | ✅ done |
-| 3 | GitHub webhook + auto-updating PR comments, Secrets Manager, retries, monitoring | ⏳ |
-| 4 | Benchmark framework + dataset, React dashboard, docs, v1.0 | ⏳ |
+| Week 1 | Local engine: parser, 5 deterministic analyzers, scoring engine, CLI, CDK foundation | ✅ v0.1 |
+| Week 2 | Bedrock AI analyzer (evidence-grounded), Step Functions + Lambda, DynamoDB/S3, CloudWatch | ✅ v0.2 |
+| Week 3 | GitHub automation | ⏳ next |
+| Week 4 | Evaluation + v1.0 | ⏳ |
+
+**Week 3 — GitHub automation (next up)**
+
+- Webhook endpoint (PR opened/reopened/synchronize) with HMAC signature
+  verification; GitHub token and webhook secret in AWS Secrets Manager.
+- Fetch PR metadata + diff from the GitHub API; start the existing workflow.
+- Post the risk report as a PR comment and **update it in place** on new
+  pushes (the comment marker already exists in the renderer).
+- End-to-end retries, idempotency (de-duplicate deliveries), and monitoring.
+- Milestone: *open a PR → risk report appears on it automatically.*
+
+**Week 4 — evaluation and v1.0**
+
+- Benchmark framework over 100–300 labeled PRs in 7 categories; arms:
+  (A) deterministic-only, (B) LLM-only, (C) hybrid, (D) gated hybrid.
+  Precision/recall/F1, FP/FN rate, latency, cost; JSON + CSV export;
+  every number regenerable from committed configs.
+- React dashboard (totals, risk distribution and trends, recent analyses).
+- Batch inference for offline evaluation runs (50% token discount).
+- v1.0: reproducible release + research write-up groundwork.
+
+### Beyond v1.0 (direction, not commitments)
+
+- **Zero-infrastructure tier** — run entirely inside GitHub Actions with the
+  adopter's API key; the CLI gate already supports this today.
+- **More model providers** behind the existing `LLMProvider` interface
+  (Claude Platform on AWS for batch/caching parity; Ollama for offline and
+  no-cloud benchmarking).
+- **Tiered model routing** — small model first, escalate to a stronger model
+  on signal; measured as its own benchmark arm before becoming a default.
+- **Deeper deterministic analysis** — AST-based rules where regexes plateau,
+  language-aware API-contract checks.
+- **GitLab/Bitbucket adapters** once the GitHub path is stable.
 
 ## 13. Contributing
 
