@@ -7,10 +7,10 @@ Guardian analyzes every pull request before merge and produces an explainable
 deterministic static analysis with generative AI review through Amazon
 Bedrock.
 
-> **Status: v0.2 — analysis engine and AWS platform complete, GitHub
-> automation next.** Local/CI analysis works today via the CLI; an AWS-hosted
-> analysis works today via Step Functions. Webhook-driven PR comments, the
-> benchmark, and the dashboard are still ahead. Full detail:
+> **Status: v0.3 — the automated pipeline is complete.** Open a PR on a
+> connected repo and the risk report appears on it automatically; local/CI
+> analysis works via the CLI. The evaluation benchmark and the dashboard
+> (Week 4) are still ahead. Full detail:
 > [§12 Project status & roadmap](#12-project-status--roadmap).
 
 ## 1. Problem
@@ -149,8 +149,26 @@ aws stepfunctions start-execution --state-machine-arn <StateMachineArn> \
 
 ## 7. GitHub integration
 
-Automatic webhook-driven analysis with an auto-updating PR comment is a
-Week 3 deliverable. Today you can wire the CLI into any CI system:
+Webhook-driven analysis is built in. After `cdk deploy`:
+
+1. **Put a GitHub token in the secret** (the `GitHubSecretArn` output):
+   replace the `token` field's `REPLACE_ME` with a fine-grained PAT that has
+   *Pull requests: read/write* and *Contents: read* on the target repos.
+   Never commit tokens.
+2. **Add the webhook** in the repo/org settings: Payload URL = the
+   `WebhookUrl` stack output, content type `application/json`, secret = the
+   `webhook_secret` value from the same AWS secret, events = *Pull requests*.
+3. Open, reopen, or push to a PR. Guardian fetches the diff, runs the full
+   analysis, and posts the risk report as a PR comment — **updating the same
+   comment in place** on later pushes (marker-based, no comment spam).
+
+Security properties of the webhook path: constant-time HMAC-SHA256 signature
+verification before any parsing (the Function URL has no other auth by
+design); delivery-id de-duplication in DynamoDB (TTL'd) so GitHub redeliveries
+don't double-analyze; payload fields used only as identifiers; logs carry
+repo/PR/delivery ids, never payload bodies.
+
+No AWS at all? The CLI gate works in any CI system today:
 
 ```yaml
 - run: |
@@ -213,19 +231,19 @@ Nothing in this repository reports fabricated numbers.
 - Full local/CI analysis via the `guardian` CLI: diff parsing, 28
   deterministic rules across 5 analyzers, explainable 0–100 scoring,
   Markdown/JSON reports, `--fail-on` merge gate.
-- Full AWS-hosted analysis: Step Functions workflow → analyze/store Lambdas →
-  Bedrock AI review (evidence-grounded, prompt-injection hardened) →
-  DynamoDB metadata + S3 reports + CloudWatch metrics and alarm. Deployable
-  with `cdk deploy`; synth verified without Docker.
+- Full AWS-hosted analysis: Step Functions workflow (fetch → analyze → store
+  → comment) with Bedrock AI review (evidence-grounded, prompt-injection
+  hardened), DynamoDB metadata, S3 reports, CloudWatch metrics and alarms.
+  Deployable with `cdk deploy`; synth verified without Docker.
+- End-to-end GitHub automation: signed webhook → analysis → auto-updating PR
+  comment, with Secrets Manager for credentials and delivery de-duplication.
 - Cost controls: prompt caching, per-analysis cost estimates, and an
   optional deterministic escalation gate (off by default).
-- 106 tests, ~98% coverage; CI enforces an 80% floor. All AWS and model
-  calls are mocked or stub-driven — no test touches the network.
+- 127 tests, ~97% coverage; CI enforces an 80% floor. All AWS, GitHub, and
+  model calls are mocked or stub-driven — no test touches the network.
 
 **Not built yet**
 
-- No GitHub webhook: AWS analyses are started manually (CLI/`start-execution`).
-- No PR comments posted automatically.
 - No benchmark data — **all evaluation results are pending**; nothing here
   reports fabricated numbers.
 - No dashboard (`frontend/` is a placeholder).
@@ -236,20 +254,10 @@ Nothing in this repository reports fabricated numbers.
 |---|---|---|
 | Week 1 | Local engine: parser, 5 deterministic analyzers, scoring engine, CLI, CDK foundation | ✅ v0.1 |
 | Week 2 | Bedrock AI analyzer (evidence-grounded), Step Functions + Lambda, DynamoDB/S3, CloudWatch | ✅ v0.2 |
-| Week 3 | GitHub automation | ⏳ next |
-| Week 4 | Evaluation + v1.0 | ⏳ |
+| Week 3 | GitHub automation: signed webhook, auto-updating PR comments, Secrets Manager, dedup | ✅ v0.3 |
+| Week 4 | Evaluation + v1.0 | ⏳ next |
 
-**Week 3 — GitHub automation (next up)**
-
-- Webhook endpoint (PR opened/reopened/synchronize) with HMAC signature
-  verification; GitHub token and webhook secret in AWS Secrets Manager.
-- Fetch PR metadata + diff from the GitHub API; start the existing workflow.
-- Post the risk report as a PR comment and **update it in place** on new
-  pushes (the comment marker already exists in the renderer).
-- End-to-end retries, idempotency (de-duplicate deliveries), and monitoring.
-- Milestone: *open a PR → risk report appears on it automatically.*
-
-**Week 4 — evaluation and v1.0**
+**Week 4 — evaluation and v1.0 (next up)**
 
 - Benchmark framework over 100–300 labeled PRs in 7 categories; arms:
   (A) deterministic-only, (B) LLM-only, (C) hybrid, (D) gated hybrid.

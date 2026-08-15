@@ -16,9 +16,11 @@ Guardian's own design assumptions (enforced in code and reviews):
   and instruct the model to ignore instructions embedded in code or comments;
   model output is validated against a strict schema.
 - **Secrets.** No credentials in the repository. AWS access uses IAM roles;
-  the GitHub webhook secret and token live in AWS Secrets Manager (Week 3).
-- **Webhooks.** GitHub webhook deliveries are verified with HMAC signatures
-  before any processing (Week 3).
+  the GitHub webhook secret and token live in AWS Secrets Manager, cached
+  per Lambda container and never logged.
+- **Webhooks.** Deliveries are authenticated with constant-time HMAC-SHA256
+  signature verification before the payload is parsed at all; delivery ids
+  are de-duplicated in DynamoDB. Payload fields are used only as identifiers.
 - **Data minimization.** DynamoDB stores analysis metadata; S3 stores
   sanitized reports with a 90-day artifact expiry; raw repository source is
   not persisted, and logs must never contain source code or secrets.
