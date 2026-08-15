@@ -78,6 +78,10 @@ class MetricsPublisher:
     def publish_failure(self) -> None:
         self._put([{"MetricName": "AnalysisFailed", "Value": 1, "Unit": "Count"}])
 
+    def publish_count(self, metric_name: str, value: int = 1) -> None:
+        """One-off counter (webhook events, comment publishes, …)."""
+        self._put([{"MetricName": metric_name, "Value": value, "Unit": "Count"}])
+
     def _put(self, data: list[dict]) -> None:
         try:
             # PutMetricData accepts at most 1000 datums; ours is far below.

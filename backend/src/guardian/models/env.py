@@ -25,4 +25,7 @@ def config_from_env() -> GuardianConfig:
         dynamodb_table=os.environ.get("GUARDIAN_TABLE", defaults.dynamodb_table),
         reports_bucket=os.environ.get("GUARDIAN_BUCKET", defaults.reports_bucket),
         metrics_namespace=os.environ.get("GUARDIAN_METRICS_NAMESPACE", defaults.metrics_namespace),
+        github_api_url=os.environ.get("GUARDIAN_GITHUB_API_URL", defaults.github_api_url),
+        github_secret_arn=os.environ.get("GUARDIAN_GITHUB_SECRET_ARN", defaults.github_secret_arn),
+        state_machine_arn=os.environ.get("GUARDIAN_STATE_MACHINE_ARN", defaults.state_machine_arn),
     )

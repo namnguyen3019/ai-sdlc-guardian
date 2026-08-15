@@ -85,6 +85,15 @@ class GuardianConfig(BaseModel):
     reports_bucket: str = ""
     metrics_namespace: str = "AiSdlcGuardian"
 
+    # --- GitHub integration (Week 3) --------------------------------------
+    github_api_url: str = "https://api.github.com"
+    github_secret_arn: str = ""
+    state_machine_arn: str = ""
+    # Webhook delivery ids are remembered this long for de-duplication.
+    webhook_dedup_ttl_seconds: int = 7 * 24 * 3600
+    # GitHub caps comments at 65536 chars; leave room for the truncation note.
+    comment_max_chars: int = 60_000
+
 
 def load_config(path: str | Path | None = None) -> GuardianConfig:
     """Load configuration from a JSON file, or return defaults."""
