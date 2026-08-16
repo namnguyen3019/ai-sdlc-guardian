@@ -83,6 +83,25 @@ class GitHubClient:
             raise GitHubError(f"fetching diff for {repository}#{pr_number} failed with {status}", status)
         return raw.decode("utf-8", errors="replace")
 
+    # ----------------------------------------------------------------- commits
+    def get_commit_diff(self, repository: str, sha: str) -> str:
+        status, raw = self._request(
+            "GET", f"/repos/{repository}/commits/{sha}", accept="application/vnd.github.diff"
+        )
+        if status >= 400:
+            raise GitHubError(f"fetching commit diff {repository}@{sha} failed with {status}", status)
+        return raw.decode("utf-8", errors="replace")
+
+    def get_repo_license(self, repository: str) -> str:
+        """SPDX id of the repo license, or '' when GitHub cannot detect one."""
+        try:
+            data = self._json("GET", f"/repos/{repository}/license")
+        except GitHubError:
+            return ""
+        if isinstance(data, dict):
+            return str((data.get("license") or {}).get("spdx_id") or "")
+        return ""
+
     # ------------------------------------------------------------------ comments
     def list_issue_comments(self, repository: str, pr_number: int) -> list[dict]:
         # First page of 100 is ample: the Guardian comment is posted early in a

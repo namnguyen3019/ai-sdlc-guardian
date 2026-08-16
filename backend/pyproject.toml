@@ -25,6 +25,7 @@ aws = [
 
 [project.scripts]
 guardian = "guardian.cli:main"
+guardian-bench = "guardian.benchmark.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
