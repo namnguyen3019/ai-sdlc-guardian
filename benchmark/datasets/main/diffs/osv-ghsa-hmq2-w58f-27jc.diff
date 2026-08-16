@@ -1,0 +1,30 @@
+diff --git a/git/objects/submodule/base.py b/git/objects/submodule/base.py
+index 56fd16669..9b1eb0e02 100644
++++ b/git/objects/submodule/base.py
+--- a/git/objects/submodule/base.py
+@@ -316,9 +316,8 @@ def _validated_name(cls, name: str) -> str:
+ 
+     @classmethod
+     def _module_abspath(cls, parent_repo: "Repo", path: PathLike, name: str) -> PathLike:
+-        name = cls._validated_name(name)
+         if cls._need_gitfile_submodules(parent_repo.git):
++            return osp.join(parent_repo.git_dir, "modules", cls._validated_name(name))
+-            return osp.join(parent_repo.git_dir, "modules", name)
+         if parent_repo.working_tree_dir:
+             return osp.join(parent_repo.working_tree_dir, path)
+         raise NotADirectoryError()
+diff --git a/test/test_submodule.py b/test/test_submodule.py
+index 8c8a53641..32b1c7af1 100644
++++ b/test/test_submodule.py
+--- a/test/test_submodule.py
+@@ -971,10 +971,6 @@ def test_update_rejects_parent_component_in_name(self, rwdir):
+             with pytest.raises(ValueError, match="submodule name"):
+                 Submodule._module_abspath(clone, "module", name)
+ 
+-        with mock.patch.object(Submodule, "_need_gitfile_submodules", return_value=False):
+-            with pytest.raises(ValueError, match="submodule name"):
+-                Submodule._module_abspath(clone, "module", "../module")
+-
+     @with_rw_directory
+     @_patch_git_config("protocol.file.allow", "always")
+     def test_root_update_keeps_going_after_invalid_submodule_name(self, rwdir):

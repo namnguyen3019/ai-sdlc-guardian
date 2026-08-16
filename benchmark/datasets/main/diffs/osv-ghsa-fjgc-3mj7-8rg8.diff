@@ -1,0 +1,1928 @@
+diff --git a/doc/skins.adoc b/doc/skins.adoc
+index 33999e94862..df3c7168e4e 100644
++++ b/doc/skins.adoc
+--- a/doc/skins.adoc
+@@ -6,18 +6,11 @@ A skin is a directory located under `static/skins/<skin_name>`, with the followi
+ * `index.css`: stylesheet affecting `/`
+ * `pad.js`: javascript that will be run in `/p/:padid`
+ * `pad.css`: stylesheet affecting `/p/:padid`
++* `timeslider.js`: javascript that will be run in `/p/:padid/timeslider`
++* `timeslider.css`: stylesheet affecting `/p/:padid/timeslider`
+-* `timeslider.js`: javascript that will be run in the embedded timeslider iframe
+-* `timeslider.css`: stylesheet affecting the embedded timeslider iframe
+ * `favicon.ico`: overrides the default favicon
+ * `robots.txt`: overrides the default `robots.txt`
+ 
+-Since Etherpad *2.7*, the timeslider is rendered in-place inside the pad
+-page (issue #7659). Direct visits to `/p/:padid/timeslider` 302-redirect to
+-`/p/:padid` so the in-pad `PadModeController` can take over via a `#rev/N`
+-URL hash. The full timeslider HTML is still served at
+-`/p/:padid/timeslider?embed=1` -- that is the URL the in-pad iframe loads,
+-and the URL to use if you embed the timeslider in your own page.
+-
+ You can choose a skin changing the parameter `skinName` in `settings.json`.
+ 
+ Since Etherpad **1.7.5**, two skins are included:
+diff --git a/doc/skins.md b/doc/skins.md
+index ea5035caef5..954179f788d 100644
++++ b/doc/skins.md
+--- a/doc/skins.md
+@@ -6,15 +6,8 @@ A skin is a directory located under `static/skins/<skin_name>`, with the followi
+ * `index.css`: stylesheet affecting `/`
+ * `pad.js`: javascript that will be run in `/p/:padid`
+ * `pad.css`: stylesheet affecting `/p/:padid`
++* `timeslider.js`: javascript that will be run in `/p/:padid/timeslider`
++* `timeslider.css`: stylesheet affecting `/p/:padid/timeslider`
+-* `timeslider.js`: javascript that will be run in the embedded timeslider iframe
+-* `timeslider.css`: stylesheet affecting the embedded timeslider iframe
+-
+-Since Etherpad **2.7**, the timeslider is rendered in-place inside the pad
+-page (issue #7659). Direct visits to `/p/:padid/timeslider` 302-redirect to
+-`/p/:padid` so the in-pad PadModeController can take over via a `#rev/N`
+-URL hash. The full timeslider HTML is still served at
+-`/p/:padid/timeslider?embed=1` — that is the URL the in-pad iframe loads,
+-and the URL to use if you embed the timeslider in your own page.
+ * `favicon.ico`: overrides the default favicon
+ * `robots.txt`: overrides the default `robots.txt`
+ 
+diff --git a/src/locales/en.json b/src/locales/en.json
+index 2172cb22f72..7b899881f0e 100644
++++ b/src/locales/en.json
+--- a/src/locales/en.json
+@@ -234,19 +234,6 @@
+   "timeslider.followContents": "Follow pad content updates",
+   "timeslider.pageTitle": "{{appTitle}} Timeslider",
+   "timeslider.toolbar.returnbutton": "Return to pad",
+-  "pad.historyMode.banner": "Viewing history",
+-  "pad.historyMode.return": "Return to live",
+-  "pad.historyMode.revisionLabel": "Revision {{rev}}",
+-  "pad.historyMode.controlsLabel": "Pad history controls",
+-  "pad.historyMode.sliderLabel": "Pad revision",
+-  "pad.historyMode.settings.title": "History playback",
+-  "pad.historyMode.settings.follow": "Follow pad content updates",
+-  "pad.historyMode.settings.followShort": "Follow",
+-  "pad.historyMode.followOn": "Following pad changes — click to stop following",
+-  "pad.historyMode.followOff": "Not following pad changes — click to follow",
+-  "pad.historyMode.settings.playbackSpeed": "Playback speed:",
+-  "pad.historyMode.chat.replayHeader": "Chat as of {{time}}",
+-  "pad.historyMode.users.authorsHeader": "Authors at this revision",
+   "timeslider.toolbar.authors": "Authors:",
+   "timeslider.toolbar.authorsList": "No Authors",
+   "timeslider.toolbar.exportlink.title": "Export",
+diff --git a/src/node/handler/PadMessageHandler.ts b/src/node/handler/PadMessageHandler.ts
+index 8e4cd8f2b35..22f80ea8dc6 100644
++++ b/src/node/handler/PadMessageHandler.ts
+--- a/src/node/handler/PadMessageHandler.ts
+@@ -418,12 +418,6 @@ exports.handleMessage = async (socket:any, message: ClientVarMessage) => {
+       padID: message.padId,
+       token: resolvedToken,
+     };
+-    // Issue #7659: connections from the in-place history iframe must not
+-    // trigger the duplicate-author kick — they share the parent's author
+-    // by design, and kicking the parent on iframe load would tear down
+-    // the live editor mid-session. The iframe sets `embed=1` in its
+-    // socket.io handshake query.
+-    thisSession.embed = socket.handshake?.query?.embed === '1';
+ 
+     // Pad does not exist, so we need to sanitize the id
+     if (!(await padManager.doesPadExist(thisSession.auth.padID))) {
+@@ -1057,16 +1051,12 @@ const handleClientReady = async (socket:any, message: ClientReadyMessage) => {
+   // stable identity across windows and devices, so concurrent same-author
+   // sessions are legitimate and must not be kicked.
+   const roomSockets = _getRoomSockets(pad.id);
++  if (user == null) {
+-  if (user == null && !sessionInfo.embed) {
+     for (const otherSocket of roomSockets) {
+       // The user shouldn't have joined the room yet, but check anyway just in case.
+       if (otherSocket.id === socket.id) continue;
+       const sinfo = sessioninfos[otherSocket.id];
++      if (sinfo && sinfo.author === sessionInfo.author) {
+-      // Embedded sessions (issue #7659 — in-place history iframe) share
+-      // the parent's author by design, so they neither kick same-author
+-      // sockets nor get kicked by them. Only non-embedded same-author
+-      // duplicates (real stale tabs) hit the kick path.
+-      if (sinfo && sinfo.author === sessionInfo.author && !sinfo.embed) {
+         // fix user's counter, works on page refresh or if user closes browser window and then rejoins
+         sessioninfos[otherSocket.id] = {};
+         otherSocket.leave(sessionInfo.padId);
+diff --git a/src/node/hooks/express/specialpages.ts b/src/node/hooks/express/specialpages.ts
+index 5db7526e0e3..660f2b4d426 100644
++++ b/src/node/hooks/express/specialpages.ts
+--- a/src/node/hooks/express/specialpages.ts
+@@ -228,14 +228,8 @@ const handleLiveReload = async (args: ArgsExpressType, padString: string, timeSl
+       })
+ 
+       setRouteHandler("/p/:pad/timeslider", (req: any, res: any, next: Function) => {
+-        // Direct visits (legacy bookmarks) get redirected back to the pad,
+-        // where the in-pad PadModeController handles entering history mode.
+-        // The iframe used by history mode requests this URL with ?embed=1
+-        // and gets the full timeslider HTML rendered for embedded use.
+-        if (req.query.embed !== '1') {
+-          return res.redirect(302, `../${encodeURIComponent(req.params.pad)}`);
+-        }
+         ensureAuthorTokenCookie(req, res, settings);
++        console.log("Reloading pad")
+         // The below might break for pads being rewritten
+         const isReadOnly = !webaccess.userCanModify(req.params.pad, req);
+ 
+@@ -252,7 +246,6 @@ const handleLiveReload = async (args: ArgsExpressType, padString: string, timeSl
+           req,
+           toolbar,
+           isReadOnly,
+-          embed: true,
+           entrypoint: proxyPath + '/watch/timeslider?hash=' + hash,
+           settings: settings.getPublicSettings(),
+           socialMetaHtml,
+@@ -399,18 +392,6 @@ exports.expressCreateServer = async (_hookName: string, args: ArgsExpressType, c
+ 
+     // serve timeslider.html under /p/$padname/timeslider
+     args.app.get('/p/:pad/timeslider', (req: any, res: any, next: Function) => {
+-      // Direct visits (legacy bookmarks) get redirected back to the pad,
+-      // where the in-pad PadModeController handles entering history mode.
+-      // The iframe used by history mode requests this URL with ?embed=1
+-      // and gets the full timeslider HTML rendered for embedded use.
+-      if (req.query.embed !== '1') {
+-        // Absolute path (not relative `../`) so Firefox and Chrome resolve
+-        // it identically — relative redirects from /p/:pad/timeslider are
+-        // technically well-defined but Firefox dropped a trailing-slash
+-        // case once that flaked the legacy-URL test (#7710).
+-        const proxyPath = sanitizeProxyPath(req);
+-        return res.redirect(302, `${proxyPath}/p/${encodeURIComponent(req.params.pad)}`);
+-      }
+       ensureAuthorTokenCookie(req, res, settings);
+       hooks.callAll('padInitToolbar', {
+         toolbar,
+@@ -422,7 +403,6 @@ exports.expressCreateServer = async (_hookName: string, args: ArgsExpressType, c
+       res.send(eejs.require('ep_etherpad-lite/templates/timeslider.html', {
+         req,
+         toolbar,
+-        embed: true,
+         entrypoint: "../../"+fileNameTimeSlider,
+         settings: settings.getPublicSettings(),
+         socialMetaHtml,
+diff --git a/src/static/css/pad.css b/src/static/css/pad.css
+index aa1fcbbeacc..754337557f1 100644
++++ b/src/static/css/pad.css
+--- a/src/static/css/pad.css
+@@ -107,182 +107,3 @@ input {
+ }
+ #version-badge[data-level="severe"]   { background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; }
+ #version-badge[data-level="vulnerable"] { background: #f8d7da; color: #58151c; border: 1px solid #f1aeb5; }
+-
+-/* ----------------------------------------------------------------------- */
+-/* History mode (issue #7659): timeslider rendered in-place inside the     */
+-/* pad page. The live editor stays mounted but hidden; a sibling iframe    */
+-/* hosts the existing timeslider replay code.                              */
+-/* ----------------------------------------------------------------------- */
+-
+-.history-banner {
+-  display: flex;
+-  align-items: center;
+-  gap: 12px;
+-  padding: 10px 16px;
+-  background: #fff8e1;
+-  border-bottom: 1px solid #f0d27a;
+-  color: #5b4b00;
+-  font-size: 14px;
+-  z-index: 5;
+-}
+-.history-banner[hidden] { display: none; }
+-.history-banner-label   { font-weight: 600; }
+-.history-banner-rev,
+-.history-banner-date    { opacity: 0.85; }
+-.history-banner #history-banner-return { margin-left: auto; }
+-
+-/* The history iframe takes the place of the live ACE editor. We use the    */
+-/* same positioning model (absolute, fill the editor area) so the page      */
+-/* layout is identical between modes.                                       */
+-.history-frame-mount {
+-  display: none;
+-  position: absolute;
+-  inset: 0;
+-  border: 0;
+-  background: var(--bg-color, #f2f3f4);
+-  z-index: 4;
+-}
+-.history-frame-mount[hidden] { display: none; }
+-.history-frame-mount > iframe {
+-  width: 100%;
+-  height: 100%;
+-  border: 0;
+-  display: block;
+-}
+-
+-/* While in history mode, hide the live ACE editor and show the history    */
+-/* iframe in its place. The formatting menu on the left side of the        */
+-/* toolbar (Bold/Italic/Lists/Indent/Undo/etc.) targets the hidden live    */
+-/* editor, so we swap it for the history controls (slider + play/step      */
+-/* buttons) that drive the iframe. The right-side menu (Settings / Share / */
+-/* Users / Chat / Home) stays fully interactive across modes.              */
+-body.history-mode #editorcontainer { display: none; }
+-body.history-mode #editorcontainerbox { position: relative; }
+-body.history-mode .history-frame-mount { display: block; }
+-body.history-mode #editbar .menu_left { display: none; }
+-body.history-mode #editbar .show-more-icon-btn { display: none; }
+-body.history-mode #history-controls { display: flex; }
+-
+-/* History toolbar controls (issue #7659): a slider + play/pause/step      */
+-/* buttons + Follow/Speed controls that remote-control the embedded        */
+-/* timeslider iframe. Take the place of the formatting menu while          */
+-/* scrubbing. align-items + min-height keep the toolbar the same vertical  */
+-/* size as in live mode so swapping modes doesn't reflow the layout.       */
+-.history-controls {
+-  display: none;
+-  flex: 1 1 auto;
+-  align-items: center;
+-  gap: 8px;
+-  padding: 0 12px;
+-  min-width: 0;
+-  min-height: 40px;
+-}
+-.history-controls[hidden] { display: none; }
+-.history-controls button.buttonicon {
+-  flex: 0 0 auto;
+-  /* Match the live-toolbar buttonicon visual weight (no <li><a> wrapper  */
+-  /* gives us a smaller default; bump padding so the icon hit area lines */
+-  /* up vertically with menu_right's settings/share/users/etc. icons).   */
+-  padding: 6px 8px;
+-  background: transparent;
+-  border: 0;
+-  cursor: pointer;
+-  font-size: 15px;
+-  color: inherit;
+-}
+-.history-controls button.buttonicon:hover { background: rgba(0,0,0,0.06); border-radius: 4px; }
+-.history-controls button.buttonicon.buttonicon-play.pause::before {
+-  content: "\e829";
+-}
+-.history-slider-input {
+-  flex: 1 1 auto;
+-  min-width: 80px;
+-  margin: 0 6px;
+-  cursor: pointer;
+-}
+-.history-timer {
+-  flex: 0 0 auto;
+-  font-size: 12px;
+-  font-variant-numeric: tabular-nums;
+-  opacity: 0.85;
+-  white-space: nowrap;
+-}
+-.history-toggle {
+-  flex: 0 0 auto;
+-  display: inline-flex;
+-  align-items: center;
+-  gap: 4px;
+-  font-size: 13px;
+-  white-space: nowrap;
+-  cursor: pointer;
+-}
+-.history-toggle input[type="checkbox"] { margin: 0; }
+-
+-/* Follow toggle — eye icon, with a diagonal slash that appears only when
+- * the underlying checkbox is unchecked (auto-follow disabled). The hidden
+- * input still drives state (so pad_mode.ts's bridge code reads .checked
+- * and the existing label-for relationship handles click). */
+-.history-follow-toggle {
+-  flex: 0 0 auto;
+-  display: inline-flex;
+-  align-items: center;
+-  justify-content: center;
+-  width: 30px;
+-  height: 30px;
+-  cursor: pointer;
+-  border-radius: 4px;
+-  color: inherit;
+-}
+-.history-follow-toggle:hover { background: rgba(0,0,0,0.06); }
+-.history-follow-eye-slash { display: none; }
+-#history-options-followContents:not(:checked) + .history-follow-toggle .history-follow-eye-slash {
+-  display: inline;
+-}
+-#history-options-followContents:not(:checked) + .history-follow-toggle {
+-  opacity: 0.55;
+-}
+-/* Keep the checkbox in the DOM (label-for needs a present target) but
+- * hidden visually + accessibly redundant since the label conveys state. */
+-#history-options-followContents.sr-only {
+-  position: absolute;
+-  width: 1px; height: 1px;
+-  margin: -1px; padding: 0; border: 0;
+-  clip: rect(0 0 0 0); overflow: hidden;
+-}
+-.history-speed {
+-  flex: 0 0 auto;
+-  font-size: 13px;
+-  padding: 2px 4px;
+-  max-width: 130px;
+-}
+-
+-/* Responsive — Follow + Speed inherit .hide-for-mobile (already collapses */
+-/* at <=800px). Pack the remaining play/slider/step buttons tighter so     */
+-/* they always fit. At ultra-narrow widths the step buttons compact too.   */
+-@media (max-width: 800px) {
+-  .history-controls { padding: 0 6px; gap: 4px; min-height: 36px; }
+-  .history-controls button.buttonicon { padding: 4px 6px; min-width: 32px; }
+-  .history-slider-input { min-width: 60px; margin: 0 2px; }
+-}
+-@media (max-width: 480px) {
+-  .history-controls #history-leftstep,
+-  .history-controls #history-rightstep { min-width: 28px; padding: 2px; }
+-}
+-
+-/* Chat replay header — appears above the chat log while scrubbing so the  */
+-/* user knows the message list is filtered to a historical timestamp.      */
+-.history-chat-header {
+-  display: none;
+-  padding: 6px 10px;
+-  font-size: 12px;
+-  font-weight: 600;
+-  background: #fff8e1;
+-  color: #5b4b00;
+-  border-bottom: 1px solid #f0d27a;
+-}
+-body.history-mode .history-chat-header { display: block; }
+-body.history-mode .history-authors-row {
+-  font-style: italic;
+-  opacity: 0.85;
+-  padding: 6px 8px;
+-}
+diff --git a/src/static/css/timeslider.css b/src/static/css/timeslider.css
+index 800ad6a8a6e..65506021ec0 100644
++++ b/src/static/css/timeslider.css
+--- a/src/static/css/timeslider.css
+@@ -3,20 +3,6 @@
+   display: block;
+ }
+ 
+-/* When the timeslider is embedded as an iframe inside a pad page (the
+- * parent pad's history mode — issue #7659), the outer pad's toolbar,
+- * banner, slider, and Settings/Export popups own all chrome, and the
+- * iframe is purely the editor surface. The .iframe-mode class is added
+- * by timeslider.ts only when window.parent !== window, so direct visits
+- * to /p/:pad/timeslider?embed=1 (existing test/legacy entry points)
+- * keep their full chrome and stay independently usable. */
+-body.embedded-history-frame.iframe-mode #editbar,
+-body.embedded-history-frame.iframe-mode #import_export,
+-body.embedded-history-frame.iframe-mode #connectivity,
+-body.embedded-history-frame.iframe-mode #settings {
+-  display: none !important;
+-}
+-
+ .timeslider-bar {
+   display: flex;
+   flex-direction: row;
+diff --git a/src/static/js/broadcast.ts b/src/static/js/broadcast.ts
+index 8551f1d0cfa..37d98a6e8aa 100644
++++ b/src/static/js/broadcast.ts
+--- a/src/static/js/broadcast.ts
+@@ -50,10 +50,7 @@ const loadBroadcastJS = (socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
+     }
+   };
+ 
++  const padContents = {
+-  // Exposed on `window` so the outer pad shell (issue #7659 in-place
+-  // history mode) can read `currentTime` after each scrub to drive chat
+-  // replay and other revision-anchored UI without postMessage round-trips.
+-  const padContents: any = (window as any).padContents = {
+     currentRevision: clientVars.collab_client_vars.rev,
+     currentTime: clientVars.collab_client_vars.time,
+     currentLines:
+@@ -158,14 +155,12 @@ const loadBroadcastJS = (socket, sendSocketMsg, fireWhenAllScriptsAreLoaded, Bro
+       let height;
+       const nextDocLine = docLine.nextElementSibling;
+       if (nextDocLine) {
++        if (lineOffsets.length === 0) {
++          height = nextDocLine.offsetTop - parseInt(
++              innerdocbodyStyles.getPropertyValue('padding-top'));
++        } else {
++          height = nextDocLine.offsetTop - docLine.offsetTop;
++        }
+-        // Use the consistent (next - current) formula for every line,
+-        // including the first. The previous first-line special case
+-        // subtracted innerdocbody.padding-top from nextDocLine.offsetTop,
+-        // which only works when innerdocbody is the offsetParent. In the
+-        // in-pad history iframe (#7659) it isn't (its outerdocbody has
+-        // padding-top of its own), so the first gutter row was 20px too
+-        // tall and every subsequent row drifted out of alignment.
+-        height = nextDocLine.offsetTop - docLine.offsetTop;
+       } else {
+         height = docLine.clientHeight || docLine.offsetHeight;
+       }
+diff --git a/src/static/js/chat.ts b/src/static/js/chat.ts
+index b47c8da6354..35b0e96b0b1 100644
++++ b/src/static/js/chat.ts
+--- a/src/static/js/chat.ts
+@@ -198,10 +198,6 @@ exports.chat = (() => {
+           // ctx.text was HTML-escaped before calling the hook. Hook functions are trusted to not
+           // introduce an XSS vulnerability by adding unescaped user input.
+           .append($('<div>').html(ctx.text).contents());
+-      // The outer pad's history mode (issue #7659) filters rendered messages
+-      // by this attribute when scrubbing; a missing attribute would always
+-      // show the message regardless of timestamp.
+-      chatMsg.attr('data-timestamp', String(msg.time));
+       if (isHistoryAdd) chatMsg.insertAfter('#chatloadmessagesbutton');
+       else $('#chattext').append(chatMsg);
+       chatMsg.each((i, e) => html10n.translateElement(html10n.translations, e));
+diff --git a/src/static/js/pad.ts b/src/static/js/pad.ts
+index b6b77673098..26234bfef17 100644
++++ b/src/static/js/pad.ts
+--- a/src/static/js/pad.ts
+@@ -42,7 +42,6 @@ const getCollabClient = require('./collab_client').getCollabClient;
+ const padconnectionstatus = require('./pad_connectionstatus').padconnectionstatus;
+ const padcookie = require('./pad_cookie').padcookie;
+ const padeditbar = require('./pad_editbar').padeditbar;
+-const padMode = require('./pad_mode').padMode;
+ const padeditor = require('./pad_editor').padeditor;
+ const padimpexp = require('./pad_impexp').padimpexp;
+ const padmodals = require('./pad_modals').padmodals;
+@@ -678,7 +677,6 @@ const pad = {
+       $('#colorpicker').farbtastic({callback: '#mycolorpickerpreview', width: 220});
+       $('#readonlyinput').on('click', () => { padeditbar.setEmbedLinks(); });
+       padcookie.init();
+-      padMode.init();
+       await handshake();
+       this._afterHandshake();
+     })());
+diff --git a/src/static/js/pad_editbar.ts b/src/static/js/pad_editbar.ts
+index f9f581d28a5..a44f0fd8489 100644
++++ b/src/static/js/pad_editbar.ts
+--- a/src/static/js/pad_editbar.ts
+@@ -500,14 +500,7 @@ exports.padeditbar = new class {
+     });
+ 
+     this.registerCommand('showTimeSlider', () => {
++      document.location = `${document.location.pathname}/timeslider`;
+-      // Issue #7659: enter history in-place rather than navigating away. The
+-      // PadModeController owns the iframe lifecycle, banner, and URL hash.
+-      try {
+-        require('./pad_mode').padMode.enterHistory();
+-      } catch (_e) {
+-        // Fallback for the unlikely case the controller failed to load.
+-        document.location = `${document.location.pathname}/timeslider`;
+-      }
+     });
+ 
+     const aceAttributeCommand = (cmd, ace) => {
+diff --git a/src/static/js/pad_mode.ts b/src/static/js/pad_mode.ts
+deleted file mode 100644
+index b4902962826..00000000000
++++ /dev/null
+--- a/src/static/js/pad_mode.ts
+@@ -1,603 +0,0 @@
+-// Copyright 2026 Etherpad contributors
+-//
+-// Licensed under the Apache License, Version 2.0 (the "License");
+-// you may not use this file except in compliance with the License.
+-// You may obtain a copy of the License at
+-//
+-//     http://www.apache.org/licenses/LICENSE-2.0
+-//
+-// SPDX-License-Identifier: Apache-2.0
+-
+-// PadModeController — issue #7659.
+-//
+-// Lets the user enter/leave the timeslider in-place on the pad URL. The
+-// existing /p/:pad/timeslider stack is reused unmodified inside an iframe;
+-// this controller handles the outer DOM, browser history, and a tiny bridge
+-// between the inner slider's hash/state and the outer URL/banner.
+-
+-'use strict';
+-
+-type Mode = 'live' | 'history';
+-
+-const HASH_PREFIX = '#rev/';
+-
+-// Parse the outer-page hash. Accepts both the new "#rev/N" form and the
+-// legacy "#NN" shortlink form so old timeslider bookmarks keep working
+-// after the server-side redirect drops the path component.
+-const parseRevFromHash = (hash: string): number | null => {
+-  if (!hash || hash.length < 2) return null;
+-  if (hash.startsWith(HASH_PREFIX)) {
+-    const rest = hash.slice(HASH_PREFIX.length);
+-    if (rest === 'latest') return -1;
+-    const n = Number(rest);
+-    return Number.isInteger(n) && n >= 0 ? n : null;
+-  }
+-  // Legacy "#NN" form — preserved across the 302 redirect from the old
+-  // /p/:pad/timeslider#NN URL.
+-  if (/^#\d+$/.test(hash)) return Number(hash.slice(1));
+-  return null;
+-};
+-
+-const buildOuterHash = (rev: number | null): string =>
+-  rev == null || rev < 0 ? `${HASH_PREFIX}latest` : `${HASH_PREFIX}${rev}`;
+-
+-// Map of an outer export anchor to its live-mode `href`, captured on entry to
+-// history mode so we can restore on exit.
+-type HrefSnapshot = Map<HTMLAnchorElement, string>;
+-
+-class PadModeController {
+-  private mode: Mode = 'live';
+-  private iframe: HTMLIFrameElement | null = null;
+-  private banner: HTMLElement;
+-  private mount: HTMLElement;
+-  private revLabel: HTMLElement;
+-  private dateLabel: HTMLElement;
+-  private padId: string;
+-  private innerHashChangeHandler: (() => void) | null = null;
+-  private revObserver: MutationObserver | null = null;
+-  private syncingHash = false;
+-
+-  // History-mode bridges — populated on enter, torn down on exit.
+-  private exportSnapshot: HrefSnapshot | null = null;
+-  private usersSnapshot: string | null = null;
+-  private chatHeaderSnapshot: {parent: HTMLElement; sibling: Node | null} | null = null;
+-  private chatHeaderEl: HTMLElement | null = null;
+-  private playbackChangeListener: ((e: Event) => void) | null = null;
+-  private followChangeListener: ((e: Event) => void) | null = null;
+-  // Outer history controls (#history-controls) — bridge listeners.
+-  private outerControlListeners: Array<{el: HTMLElement; type: string; fn: EventListener}> = [];
+-
+-  constructor() {
+-    this.banner = document.getElementById('history-banner')!;
+-    this.mount = document.getElementById('history-frame-mount')!;
+-    this.revLabel = document.getElementById('history-banner-rev')!;
+-    this.dateLabel = document.getElementById('history-banner-date')!;
+-    // /p/:pad → ['', 'p', ':pad'].
+-    const parts = window.location.pathname.split('/').filter(Boolean);
+-    this.padId = decodeURIComponent(parts[parts.length - 1] || '');
+-
+-    document.getElementById('history-banner-return')!
+-        .addEventListener('click', () => { this.exitHistory(); });
+-
+-    window.addEventListener('hashchange', () => { this.onOuterHashChange(); });
+-    window.addEventListener('popstate', () => { this.onOuterHashChange(); });
+-    document.addEventListener('keydown', (e) => {
+-      if (e.key === 'Escape' && this.mode === 'history') this.exitHistory();
+-    });
+-  }
+-
+-  // Called once after pad.init() so an initial #rev/N (or legacy #NN) on
+-  // page load enters history mode without an extra round-trip.
+-  bootstrapFromHash(): void {
+-    this.localizeControls();
+-    const rev = parseRevFromHash(window.location.hash);
+-    if (rev != null) this.enterHistory(rev);
+-  }
+-
+-  // The icon buttons have no text content; we set their `title` (hover
+-  // tooltip) and `aria-label` (screen reader name) from html10n once it
+-  // has loaded. Re-runs on the html10n `localized` event so language
+-  // switches at runtime stay in sync.
+-  private localizeControls(): void {
+-    const html10n: any = (window as any).html10n;
+-    if (!html10n || typeof html10n.get !== 'function') return;
+-    const apply = () => {
+-      const setLabel = (id: string, key: string) => {
+-        const el = document.getElementById(id);
+-        if (!el) return;
+-        const txt = html10n.get(key);
+-        if (!txt) return;
+-        el.setAttribute('title', txt);
+-        el.setAttribute('aria-label', txt);
+-      };
+-      setLabel('history-playpause', 'timeslider.playPause');
+-      setLabel('history-leftstep', 'timeslider.backRevision');
+-      setLabel('history-rightstep', 'timeslider.forwardRevision');
+-      setLabel('history-slider-input', 'pad.historyMode.sliderLabel');
+-      const ctrl = document.getElementById('history-controls');
+-      const ctrlLabel = html10n.get('pad.historyMode.controlsLabel');
+-      if (ctrl && ctrlLabel) ctrl.setAttribute('aria-label', ctrlLabel);
+-      // Follow toggle is rendered as an eye icon — title (hover tooltip)
+-      // and aria-label are populated from html10n and updated whenever
+-      // state flips so screen readers + tooltip both narrate the action
+-      // the click would take.
+-      const followInput = document.getElementById('history-options-followContents') as HTMLInputElement | null;
+-      const followLabel = document.querySelector<HTMLLabelElement>('.history-follow-toggle');
+-      const updateFollowLabel = () => {
+-        if (!followLabel) return;
+-        const key = followInput && followInput.checked
+-            ? 'pad.historyMode.followOn'
+-            : 'pad.historyMode.followOff';
+-        const txt = html10n.get(key);
+-        if (!txt) return;
+-        followLabel.setAttribute('title', txt);
+-        followLabel.setAttribute('aria-label', txt);
+-      };
+-      updateFollowLabel();
+-      if (followInput && !(followInput as any)._padModeFollowBound) {
+-        followInput.addEventListener('change', updateFollowLabel);
+-        (followInput as any)._padModeFollowBound = true;
+-      }
+-    };
+-    apply();
+-    if (typeof html10n.bind === 'function') {
+-      html10n.bind('localized', apply);
+-    }
+-  }
+-
+-  getMode(): Mode { return this.mode; }
+-
+-  enterHistory(rev: number | null = null): void {
+-    if (this.mode === 'history') {
+-      // Already in history — just retarget the inner slider.
+-      if (rev != null && this.iframe) this.setInnerRevision(rev);
+-      return;
+-    }
+-    this.mode = 'history';
+-    document.body.classList.add('history-mode');
+-    this.banner.removeAttribute('hidden');
+-    this.mount.removeAttribute('hidden');
+-    const ctrl = document.getElementById('history-controls');
+-    if (ctrl) ctrl.removeAttribute('hidden');
+-
+-    // Push the new state. If the user lands here from the toolbar button we
+-    // pushState so browser back exits history; if they arrived via a direct
+-    // hash (bootstrap path) the current entry already represents history.
+-    const desiredHash = buildOuterHash(rev);
+-    if (window.location.hash !== desiredHash) {
+-      this.syncingHash = true;
+-      try {
+-        history.pushState(null, '', `${window.location.pathname}${desiredHash}`);
+-      } finally {
+-        this.syncingHash = false;
+-      }
+-    }
+-    this.mountIframe(rev);
+-  }
+-
+-  exitHistory(): void {
+-    if (this.mode === 'live') return;
+-    this.mode = 'live';
+-    this.teardownBridges();
+-    this.unmountIframe();
+-    this.banner.setAttribute('hidden', '');
+-    this.mount.setAttribute('hidden', '');
+-    const ctrl = document.getElementById('history-controls');
+-    if (ctrl) ctrl.setAttribute('hidden', '');
+-    document.body.classList.remove('history-mode');
+-    if (window.location.hash) {
+-      this.syncingHash = true;
+-      try {
+-        history.replaceState(null, '', window.location.pathname);
+-      } finally {
+-        this.syncingHash = false;
+-      }
+-    }
+-    this.revLabel.textContent = '';
+-    this.dateLabel.textContent = '';
+-  }
+-
+-  // Restore everything entry-time we stashed: chat message visibility, the
+-  // chat replay header, the live users-panel HTML, original export hrefs,
+-  // and any DOM listeners we attached to outer Settings controls.
+-  private teardownBridges(): void {
+-    document.querySelectorAll<HTMLElement>('#chattext > p[data-timestamp]')
+-        .forEach((p) => { p.style.display = ''; });
+-    if (this.chatHeaderEl) this.chatHeaderEl.remove();
+-    this.chatHeaderEl = null;
+-    this.chatHeaderSnapshot = null;
+-    if (this.usersSnapshot != null) {
+-      const tbl = document.getElementById('otheruserstable');
+-      if (tbl) tbl.innerHTML = this.usersSnapshot;
+-      this.usersSnapshot = null;
+-    }
+-    if (this.exportSnapshot) {
+-      this.exportSnapshot.forEach((href, anchor) => { anchor.setAttribute('href', href); });
+-      this.exportSnapshot = null;
+-    }
+-    if (this.playbackChangeListener) {
+-      const sel = document.getElementById('history-playbackspeed');
+-      if (sel) sel.removeEventListener('change', this.playbackChangeListener);
+-      this.playbackChangeListener = null;
+-    }
+-    if (this.followChangeListener) {
+-      const cb = document.getElementById('history-options-followContents');
+-      if (cb) cb.removeEventListener('change', this.followChangeListener);
+-      this.followChangeListener = null;
+-    }
+-    // Inner BroadcastSlider has no removeCallback API, but the whole iframe
+-    // is destroyed on exit so any callbacks die with it.
+-    this.outerControlListeners.forEach(({el, type, fn}) => el.removeEventListener(type, fn));
+-    this.outerControlListeners = [];
+-  }
+-
+-  private mountIframe(rev: number | null): void {
+-    const innerHash = rev == null || rev < 0 ? '' : `#${rev}`;
+-    const src =
+-        `${encodeURIComponent(this.padId)}/timeslider?embed=1${innerHash}`;
+-    const iframe = document.createElement('iframe');
+-    iframe.id = 'history-frame';
+-    iframe.title = 'Pad history viewer';
+-    iframe.src = src;
+-    iframe.addEventListener('load', () => { this.attachInnerBridges(iframe); });
+-    this.mount.appendChild(iframe);
+-    this.iframe = iframe;
+-  }
+-
+-  private unmountIframe(): void {
+-    if (this.revObserver) {
+-      this.revObserver.disconnect();
+-      this.revObserver = null;
+-    }
+-    if (this.iframe) {
+-      try {
+-        if (this.innerHashChangeHandler && this.iframe.contentWindow) {
+-          this.iframe.contentWindow.removeEventListener(
+-              'hashchange', this.innerHashChangeHandler);
+-        }
+-      } catch (_e) { /* cross-origin shouldn't happen, but be defensive */ }
+-      this.iframe.remove();
+-      this.iframe = null;
+-    }
+-    this.innerHashChangeHandler = null;
+-  }
+-
+-  private attachInnerBridges(iframe: HTMLIFrameElement): void {
+-    const win = iframe.contentWindow;
+-    const doc = iframe.contentDocument;
+-    if (!win || !doc) return;
+-
+-    // When the inner slider moves it sets its own location.hash (#NN). Mirror
+-    // the change to the outer URL so the user's address bar stays canonical.
+-    this.innerHashChangeHandler = () => {
+-      if (this.syncingHash) return;
+-      const innerHash = win.location.hash;
+-      const rev = innerHash.startsWith('#') ? Number(innerHash.slice(1)) : NaN;
+-      if (Number.isFinite(rev)) this.setOuterRev(rev);
+-    };
+-    win.addEventListener('hashchange', this.innerHashChangeHandler);
+-
+-    // The inner template populates #revision_label / #revision_date from JS
+-    // each time the slider moves. Mirror them into the outer banner via a
+-    // MutationObserver so the user always sees the current revision.
+-    const innerLabel = doc.getElementById('revision_label');
+-    const innerDate = doc.getElementById('revision_date');
+-    if (innerLabel || innerDate) {
+-      const sync = () => {
+-        if (innerLabel) this.revLabel.textContent = innerLabel.textContent || '';
+-        if (innerDate) this.dateLabel.textContent = innerDate.textContent || '';
+-      };
+-      sync();
+-      this.revObserver = new MutationObserver(sync);
+-      if (innerLabel) {
+-        this.revObserver.observe(innerLabel, {childList: true, subtree: true, characterData: true});
+-      }
+-      if (innerDate) {
+-        this.revObserver.observe(innerDate, {childList: true, subtree: true, characterData: true});
+-      }
+-    }
+-
+-    // Register a single slider callback that drives the outer pad's
+-    // historical-state UI: chat replay, authors-at-this-revision, and
+-    // export href rewriting. The callback fires once on initial setup
+-    // plus on every scrub.
+-    const inner: any = win as any;
+-    const registerHook = () => {
+-      const BS = inner.BroadcastSlider;
+-      if (!BS || typeof BS.onSlider !== 'function') {
+-        // Slider not initialized yet — try again on next frame.
+-        win.requestAnimationFrame(registerHook);
+-        return;
+-      }
+-      BS.onSlider((revno: number) => { this.onRevChange(revno, win); });
+-      // Drive the initial sync (the slider may have already fired before
+-      // we got here on a fast load).
+-      this.onRevChange(BS.getSliderPosition?.() ?? 0, win);
+-    };
+-    registerHook();
+-
+-    this.snapshotForHistory();
+-    this.wireSettingsBridges(win);
+-    this.wireHistoryControls(win);
+-  }
+-
+-  // Bind the outer #history-controls (slider input + play/pause/step
+-  // buttons) as a remote control for the embedded timeslider's
+-  // BroadcastSlider. The inner slider DOM stays present (the embed CSS
+-  // hides it) so its existing drag/click handlers continue to work — the
+-  // outer controls just push state into the same BroadcastSlider via its
+-  // public methods.
+-  private wireHistoryControls(innerWin: Window): void {
+-    const inner: any = innerWin as any;
+-    const sliderInput = document.getElementById('history-slider-input') as HTMLInputElement | null;
+-    const playBtn = document.getElementById('history-playpause') as HTMLButtonElement | null;
+-    const leftStep = document.getElementById('history-leftstep') as HTMLButtonElement | null;
+-    const rightStep = document.getElementById('history-rightstep') as HTMLButtonElement | null;
+-    const timer = document.getElementById('history-timer') as HTMLElement | null;
+-
+-    const bind = (el: HTMLElement | null, type: string, fn: EventListener) => {
+-      if (!el) return;
+-      el.addEventListener(type, fn);
+-      this.outerControlListeners.push({el, type, fn});
+-    };
+-
+-    bind(sliderInput, 'input', () => {
+-      if (!sliderInput) return;
+-      const target = Math.max(0, Math.floor(Number(sliderInput.value) || 0));
+-      try { inner.BroadcastSlider?.setSliderPosition?.(target); } catch (_e) {}
+-    });
+-    bind(playBtn, 'click', () => {
+-      try { inner.BroadcastSlider?.playpause?.(); } catch (_e) {}
+-    });
+-    // Inner #leftstep / #rightstep already wire all the step logic; just
+-    // forward the click so we share the same code path.
+-    bind(leftStep, 'click', () => {
+-      try { (innerWin.document.getElementById('leftstep') as HTMLElement | null)?.click(); }
+-      catch (_e) {}
+-    });
+-    bind(rightStep, 'click', () => {
+-      try { (innerWin.document.getElementById('rightstep') as HTMLElement | null)?.click(); }
+-      catch (_e) {}
+-    });
+-
+-    // Mirror inner state into the outer controls. We register a
+-    // BroadcastSlider.onSlider callback (called on every position change)
+-    // and poll the inner #playpause_button_icon.pause class for play state.
+-    const sync = (revno: number) => {
+-      const max = inner.BroadcastSlider?.getSliderLength?.();
+-      if (sliderInput && typeof max === 'number' && Number(sliderInput.max) !== max) {
+-        sliderInput.max = String(max);
+-      }
+-      if (sliderInput && Number(sliderInput.value) !== revno) {
+-        sliderInput.value = String(revno);
+-      }
+-      if (timer) {
+-        const innerTimer = innerWin.document.getElementById('timer');
+-        if (innerTimer) timer.textContent = innerTimer.textContent || '';
+-      }
+-      if (playBtn) {
+-        const innerPlay = innerWin.document.getElementById('playpause_button_icon');
+-        const playing = !!innerPlay && innerPlay.classList.contains('pause');
+-        playBtn.classList.toggle('pause', playing);
+-        playBtn.setAttribute('aria-pressed', playing ? 'true' : 'false');
+-      }
+-    };
+-    // The hook registered earlier in attachInnerBridges already calls
+-    // onRevChange — piggyback on it for slider input/timer updates by
+-    // chaining through the same listener path.
+-    const registerSync = () => {
+-      const BS = inner.BroadcastSlider;
+-      if (!BS || typeof BS.onSlider !== 'function') {
+-        innerWin.requestAnimationFrame(registerSync);
+-        return;
+-      }
+-      BS.onSlider(sync);
+-      sync(BS.getSliderPosition?.() ?? 0);
+-    };
+-    registerSync();
+-  }
+-
+-  // Capture the live state we'll restore on exit: live chat message
+-  // visibility (just the timestamps — actual messages stay), live users
+-  // panel HTML, and current Export hrefs.
+-  private snapshotForHistory(): void {
+-    if (this.usersSnapshot == null) {
+-      const tbl = document.getElementById('otheruserstable');
+-      if (tbl) this.usersSnapshot = tbl.innerHTML;
+-    }
+-    if (this.exportSnapshot == null) {
+-      this.exportSnapshot = new Map();
+-      document.querySelectorAll<HTMLAnchorElement>(
+-          '#exportColumn a.exportlink, #export a.exportlink',
+-      ).forEach((a) => {
+-        if (a.hasAttribute('href')) this.exportSnapshot!.set(a, a.getAttribute('href') || '');
+-      });
+-    }
+-    // Inject the chat replay header above #chattext on first entry.
+-    if (!this.chatHeaderEl) {
+-      const chattext = document.getElementById('chattext');
+-      if (chattext && chattext.parentNode) {
+-        const header = document.createElement('div');
+-        header.id = 'history-chat-header';
+-        header.className = 'history-chat-header';
+-        header.setAttribute('data-l10n-id', 'pad.historyMode.chat.replayHeader');
+-        header.textContent = 'Chat as of —';
+-        this.chatHeaderSnapshot = {
+-          parent: chattext.parentNode as HTMLElement,
+-          sibling: chattext,
+-        };
+-        chattext.parentNode.insertBefore(header, chattext);
+-        this.chatHeaderEl = header;
+-      }
+-    }
+-  }
+-
+-  // Called on every revision change while in history mode. Drives:
+-  //   - chat replay (filter rendered messages by timestamp)
+-  //   - authors-at-this-revision panel (mirrors inner #authorsList)
+-  //   - outer Export hrefs (point at /p/PAD/<rev>/export/<type>)
+-  private onRevChange(revno: number, innerWin: Window): void {
+-    const inner: any = innerWin as any;
+-    const ts = inner.padContents?.currentTime as number | undefined;
+-    if (typeof ts === 'number') {
+-      this.filterChatByTimestamp(ts);
+-      this.updateChatHeader(ts);
+-    }
+-    this.syncAuthorsPanel(innerWin);
+-    this.syncExportHrefs(revno);
+-  }
+-
+-  private filterChatByTimestamp(asOf: number): void {
+-    document.querySelectorAll<HTMLElement>('#chattext > p[data-timestamp]')
+-        .forEach((p) => {
+-          const t = Number(p.getAttribute('data-timestamp'));
+-          p.style.display = Number.isFinite(t) && t > asOf ? 'none' : '';
+-        });
+-  }
+-
+-  private updateChatHeader(asOf: number): void {
+-    if (!this.chatHeaderEl) return;
+-    const d = new Date(asOf);
+-    const z = (n: number) => String(n).padStart(2, '0');
+-    const time = `${z(d.getHours())}:${z(d.getMinutes())}`;
+-    // html10n.get is not always loaded; fall back to a literal string.
+-    const html10n: any = (window as any).html10n;
+-    const label = (html10n && typeof html10n.get === 'function')
+-        ? html10n.get('pad.historyMode.chat.replayHeader', {time})
+-        : `Chat as of ${time}`;
+-    this.chatHeaderEl.textContent = label;
+-  }
+-
+-  // Mirror the inner timeslider's #authorsList (rendered by broadcast.ts)
+-  // into the outer users panel. We replace the live user table while in
+-  // history mode and restore it on exit.
+-  private syncAuthorsPanel(innerWin: Window): void {
+-    const innerAuthors = (innerWin.document as Document).getElementById('authorsList');
+-    const tbl = document.getElementById('otheruserstable');
+-    if (!innerAuthors || !tbl) return;
+-    const text = innerAuthors.textContent || '';
+-    tbl.innerHTML = '';
+-    const tr = document.createElement('tr');
+-    const td = document.createElement('td');
+-    td.className = 'history-authors-row';
+-    td.textContent = text;
+-    tr.appendChild(td);
+-    tbl.appendChild(tr);
+-  }
+-
+-  // Rewrite outer export anchors so a click downloads the historical
+-  // revision instead of the live document. Etherpad already supports
+-  // /p/:pad/<rev>/export/<type>.
+-  private syncExportHrefs(revno: number): void {
+-    if (!this.exportSnapshot) return;
+-    this.exportSnapshot.forEach((origHref, anchor) => {
+-      const m = origHref.match(/^(.*\/p\/[^/]+)\/export\/([^/?#]+)/);
+-      if (!m) return;
+-      anchor.setAttribute('href', `${m[1]}/${revno}/export/${m[2]}`);
+-    });
+-  }
+-
+-  // Outer Settings popup grew a "History playback" section. Drive the inner
+-  // BroadcastSlider state from those controls so the user sees one set of
+-  // controls regardless of mode.
+-  private wireSettingsBridges(innerWin: Window): void {
+-    const speedSel = document.getElementById('history-playbackspeed') as HTMLSelectElement | null;
+-    const followCb = document.getElementById('history-options-followContents') as HTMLInputElement | null;
+-    const inner: any = innerWin as any;
+-
+-    if (speedSel) {
+-      // Initial sync: read existing inner cookie/setting if available.
+-      const innerSpeed = inner.document.getElementById('playbackspeed') as HTMLSelectElement | null;
+-      if (innerSpeed && innerSpeed.value) speedSel.value = innerSpeed.value;
+-      this.playbackChangeListener = () => {
+-        const v = speedSel.value || '100';
+-        try {
+-          inner.BroadcastSlider?.setPlaybackSpeed?.(v);
+-          if (innerSpeed) {
+-            innerSpeed.value = v;
+-            innerSpeed.dispatchEvent(new Event('change'));
+-          }
+-        } catch (_e) {}
+-      };
+-      speedSel.addEventListener('change', this.playbackChangeListener);
+-    }
+-
+-    if (followCb) {
+-      const innerFollow = inner.document.getElementById('options-followContents') as HTMLInputElement | null;
+-      if (innerFollow) followCb.checked = !!innerFollow.checked;
+-      this.followChangeListener = () => {
+-        if (!innerFollow) return;
+-        innerFollow.checked = followCb.checked;
+-        innerFollow.dispatchEvent(new Event('change'));
+-      };
+-      followCb.addEventListener('change', this.followChangeListener);
+-    }
+-  }
+-
+-  private setInnerRevision(rev: number): void {
+-    if (!this.iframe || !this.iframe.contentWindow) return;
+-    // The embedded timeslider treats #N as "go to revision N", so we must
+-    // NOT write #-1 (or #0 as a stand-in for "latest"); for "latest" we
+-    // jump to the slider's current upper bound, which broadcast_slider
+-    // exposes via its sliderLength on the iframe's `BroadcastSlider`.
+-    try {
+-      if (rev < 0) {
+-        const inner: any = this.iframe.contentWindow as any;
+-        const upper = inner?.BroadcastSlider?.getSliderLength?.();
+-        if (typeof upper === 'number') {
+-          this.iframe.contentWindow.location.hash = `#${upper}`;
+-        }
+-        // If BroadcastSlider isn't ready yet, leave the iframe alone — its
+-        // own init reads its hash and starts at the latest revision.
+-        return;
+-      }
+-      this.iframe.contentWindow.location.hash = `#${rev}`;
+-    } catch (_e) { /* same-origin guaranteed; ignore the unlikely failure */ }
+-  }
+-
+-  private setOuterRev(rev: number): void {
+-    const desired = buildOuterHash(rev);
+-    if (window.location.hash === desired) return;
+-    this.syncingHash = true;
+-    try {
+-      history.replaceState(null, '', `${window.location.pathname}${desired}`);
+-    } finally {
+-      this.syncingHash = false;
+-    }
+-  }
+-
+-  private onOuterHashChange(): void {
+-    if (this.syncingHash) return;
+-    const rev = parseRevFromHash(window.location.hash);
+-    if (rev == null) {
+-      if (this.mode === 'history') this.exitHistory();
+-      return;
+-    }
+-    if (this.mode === 'live') {
+-      this.enterHistory(rev);
+-    } else {
+-      this.setInnerRevision(rev);
+-    }
+-  }
+-}
+-
+-let singleton: PadModeController | null = null;
+-
+-export const padMode = {
+-  init(): void {
+-    if (singleton) return;
+-    singleton = new PadModeController();
+-    singleton.bootstrapFromHash();
+-  },
+-  enterHistory(rev: number | null = null): void {
+-    singleton?.enterHistory(rev);
+-  },
+-  exitHistory(): void {
+-    singleton?.exitHistory();
+-  },
+-  getMode(): 'live' | 'history' {
+-    return singleton ? singleton.getMode() : 'live';
+-  },
+-};
+-
+-export default padMode;
+diff --git a/src/static/js/skin_variants.ts b/src/static/js/skin_variants.ts
+index 22c055bf817..99d6af3b6ec 100644
++++ b/src/static/js/skin_variants.ts
+--- a/src/static/js/skin_variants.ts
+@@ -30,19 +30,6 @@ const updateSkinVariantsClasses = (newClasses) => {
+     $('iframe[name=ace_outer]').contents().find('iframe[name=ace_inner]').contents().find('html'),
+   ];
+ 
+-  // Issue #7659: when in-place history mode is active, the historical pad
+-  // renders inside #history-frame (its own document, with its own
+-  // ace_outer/ace_inner). Propagate skin tokens through the same path so a
+-  // user toggling dark mode while scrubbing sees the iframe re-theme.
+-  const $hist = $('#history-frame');
+-  if ($hist.length) {
+-    domsToUpdate.push($hist.contents().find('html'));
+-    domsToUpdate.push($hist.contents().find('iframe[name=ace_outer]').contents().find('html'));
+-    domsToUpdate.push(
+-        $hist.contents().find('iframe[name=ace_outer]').contents()
+-            .find('iframe[name=ace_inner]').contents().find('html'));
+-  }
+-
+   colors.forEach((color) => {
+     containers.forEach((container) => {
+       domsToUpdate.forEach((el) => { el.removeClass(`${color}-${container}`); });
+diff --git a/src/static/js/timeslider.ts b/src/static/js/timeslider.ts
+index 5b2f1e79ade..ac15aca2388 100644
++++ b/src/static/js/timeslider.ts
+--- a/src/static/js/timeslider.ts
+@@ -73,26 +73,6 @@ const init = () => {
+     // start the custom js
+     if (typeof customStart === 'function') customStart(); // eslint-disable-line no-undef
+ 
+-    // Issue #7659: when this timeslider is mounted as the in-place history
+-    // iframe inside a pad page, mark the body so CSS can hide the inner
+-    // editbar (the outer pad's toolbar owns the slider) and inherit the
+-    // parent's skin tokens so dark mode (and any other skinVariants the
+-    // user toggled at runtime) is applied immediately on first paint.
+-    // Direct visits to /p/:pad/timeslider?embed=1 (existing test/legacy
+-    // entry points) keep their full chrome because parent === window.
+-    try {
+-      if (window.parent !== window) {
+-        document.body.classList.add('iframe-mode');
+-        const parentClasses = window.parent.document.documentElement.className || '';
+-        const tokens = parentClasses.split(/\s+/).filter((c) =>
+-            /^(super-light|light|dark|super-dark)-(toolbar|editor|background)$/.test(c) ||
+-            c === 'full-width-editor');
+-        if (tokens.length) {
+-          document.documentElement.classList.add(...tokens);
+-        }
+-      }
+-    } catch (_e) { /* cross-origin parent — leave defaults */ }
+-
+     // get the padId out of the url
+     const urlParts = document.location.pathname.split('/');
+     padId = decodeURIComponent(urlParts[urlParts.length - 2]);
+@@ -105,19 +85,7 @@ const init = () => {
+     // or writes it; the server picks it up from the socket.io handshake.
+     cp = (window as any).clientVars?.cookiePrefix || '';
+ 
++    socket = socketio.connect(exports.baseURL, '/', {query: {padId}});
+-    // Pass `embed` to the server when this timeslider is the in-place
+-    // history iframe inside a pad page (issue #7659). Without this the
+-    // server's duplicate-author kick treats the iframe's connection as a
+-    // stale tab and disconnects the parent pad's live socket.
+-    const embed = (() => {
+-      try {
+-        if (window.parent === window) return false;
+-        const params = new URLSearchParams(window.location.search);
+-        return params.get('embed') === '1';
+-      } catch (_e) { return false; }
+-    })();
+-    socket = socketio.connect(
+-        exports.baseURL, '/', {query: embed ? {padId, embed: '1'} : {padId}});
+ 
+     // send the ready message once we're connected
+     socket.on('connect', () => {
+@@ -191,9 +159,6 @@ const handleClientVars = (message) => {
+   // load all script that doesn't work without the clientVars
+   BroadcastSlider = require('./broadcast_slider')
+       .loadBroadcastSliderJS(fireWhenAllScriptsAreLoaded);
+-  // Exposed on window so the outer pad shell (issue #7659 in-place history
+-  // mode) can subscribe to slider movement without postMessage round-trips.
+-  (window as any).BroadcastSlider = BroadcastSlider;
+ 
+   require('./broadcast_revisions').loadBroadcastRevisionsJS();
+   changesetLoader = require('./broadcast')
+diff --git a/src/templates/pad.html b/src/templates/pad.html
+index adc9df0cf11..8a4e3ac3c80 100644
++++ b/src/templates/pad.html
+--- a/src/templates/pad.html
+@@ -78,55 +78,6 @@
+           <%- toolbar.menu(settings.toolbar.left, isReadOnly, 'left', 'pad') %>
+           <% e.end_block(); %>
+       </ul>
+-      <!-- HISTORY-MODE CONTROLS — slider + play/step buttons swap into the
+-           toolbar's left zone while scrubbing pad history. The formatting
+-           menu_left is hidden in history mode so this fills its space. The
+-           outer slider is just a remote control for the embedded
+-           timeslider iframe's BroadcastSlider; pad_mode.ts owns the
+-           bridging.
+-
+-           Accessible names + tooltip titles are populated by pad_mode.ts
+-           after html10n is ready, reusing the existing `timeslider.*`
+-           translation keys. We deliberately do NOT put data-l10n-id on
+-           the icon buttons — that would set their textContent, which on
+-           a buttonicon glyph would draw the localized string on screen. -->
+-      <div id="history-controls" class="history-controls" role="toolbar" hidden>
+-        <button type="button" id="history-playpause" class="buttonicon buttonicon-play"
+-                aria-pressed="false"></button>
+-        <button type="button" id="history-leftstep" class="buttonicon buttonicon-step-backward">
+-        </button>
+-        <button type="button" id="history-rightstep" class="buttonicon buttonicon-step-forward">
+-        </button>
+-        <input type="range" id="history-slider-input" class="history-slider-input"
+-               min="0" max="0" value="0" step="1">
+-        <span id="history-timer" class="history-timer hide-for-mobile" aria-live="polite"></span>
+-        <!-- Follow toggle: an icon-only button. The eye is always rendered;
+-             the diagonal slash overlay is shown only when aria-pressed is
+-             false. Backed by a hidden checkbox so existing pad_mode.ts
+-             bridge code (which reads .checked) keeps working. -->
+-        <input type="checkbox" id="history-options-followContents" class="sr-only" checked>
+-        <label for="history-options-followContents" class="history-follow-toggle hide-for-mobile"
+-               aria-hidden="true">
+-          <svg class="history-follow-eye" width="16" height="16" viewBox="0 0 16 16"
+-               aria-hidden="true" focusable="false">
+-            <path class="history-follow-eye-shape"
+-                  d="M1.2 8C2.7 4.4 5.1 2.5 8 2.5s5.3 1.9 6.8 5.5c-1.5 3.6-3.9 5.5-6.8 5.5S2.7 11.6 1.2 8z"
+-                  fill="none" stroke="currentColor" stroke-width="1.4"/>
+-            <circle class="history-follow-eye-pupil" cx="8" cy="8" r="2.3" fill="currentColor"/>
+-            <line class="history-follow-eye-slash" x1="2" y1="14" x2="14" y2="2"
+-                  stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+-          </svg>
+-        </label>
+-        <select id="history-playbackspeed" class="history-speed hide-for-mobile"
+-                aria-label="Playback speed"
+-                data-l10n-aria-label="true">
+-          <option value="100" data-l10n-id="timeslider.settings.playbackSpeed.original">Original speed</option>
+-          <option value="realtime" data-l10n-id="timeslider.settings.playbackSpeed.realtime">Realtime</option>
+-          <option value="200" data-l10n-id="timeslider.settings.playbackSpeed.200ms">200 ms</option>
+-          <option value="500" data-l10n-id="timeslider.settings.playbackSpeed.500ms">500 ms</option>
+-          <option value="1000" data-l10n-id="timeslider.settings.playbackSpeed.1000ms">1000 ms</option>
+-        </select>
+-      </div>
+       <ul class="menu_right" role="toolbar">
+           <% e.begin_block("editbarMenuRight"); %>
+           <%- toolbar.menu(settings.toolbar.right, isReadOnly, 'right', 'pad') %>
+@@ -137,17 +88,6 @@
+ 
+   <% e.begin_block("afterEditbar"); %><% e.end_block(); %>
+ 
+-  <!--------------------------------------------------------------->
+-  <!-- HISTORY-MODE BANNER (visible only when scrubbing history) -->
+-  <!--------------------------------------------------------------->
+-  <div id="history-banner" class="history-banner" role="status" aria-live="polite" hidden>
+-    <span class="history-banner-label" data-l10n-id="pad.historyMode.banner">Viewing history</span>
+-    <span class="history-banner-rev" id="history-banner-rev"></span>
+-    <span class="history-banner-date" id="history-banner-date"></span>
+-    <button type="button" id="history-banner-return" class="btn btn-primary"
+-            data-l10n-id="pad.historyMode.return">Return to live</button>
+-  </div>
+-
+   <div id="editorcontainerbox" class="flex-layout">
+ 
+       <% e.begin_block("editorContainerBox"); %>
+@@ -158,11 +98,6 @@
+ 
+       <div id="editorcontainer" class="editorcontainer" aria-label="Document editor"></div>
+ 
+-      <!--------------------------------------------------------------------->
+-      <!-- HISTORY-MODE IFRAME (mounted only while scrubbing pad history) -->
+-      <!--------------------------------------------------------------------->
+-      <div id="history-frame-mount" class="history-frame-mount" hidden></div>
+-
+       <div id="editorloadingbox">
+         <% e.begin_block("permissionDenied"); %>
+         <div id="permissionDenied">
+diff --git a/src/templates/timeSliderBootstrap.js b/src/templates/timeSliderBootstrap.js
+index f16a3dd06d8..b0cbe3e7e4f 100644
++++ b/src/templates/timeSliderBootstrap.js
+--- a/src/templates/timeSliderBootstrap.js
+@@ -8,7 +8,7 @@ window.clientVars = {
+ let BroadcastSlider;
+ 
+ 
++(function () {
+-(async function () {
+   const timeSlider = require('ep_etherpad-lite/static/js/timeslider')
+   const pathComponents = location.pathname.split('/');
+ 
+@@ -24,17 +24,12 @@ let BroadcastSlider;
+   const socket = timeSlider.socket;
+   BroadcastSlider = timeSlider.BroadcastSlider;
+   plugins.baseURL = baseURL;
++  plugins.update(function () {
++
++
++    /* TODO: These globals shouldn't exist. */
++
++  });
+-  // Pre-load plugin modules so client_hooks resolve (issue #7659): without
+-  // a populated Map the loadFn fallback calls require(path) which the
+-  // esbuild-bundled timeslider can't resolve at runtime, so plugins like
+-  // ep_headings2 silently fail to register their aceRegisterBlockElements
+-  // hook and historical revisions render without plugin chrome. Mirrors
+-  // padBootstrap.js — same pluginModules list, same per-module require.
+-  await plugins.update(new Map([
+-    <% for (const module of pluginModules) { %>
+-    [<%- JSON.stringify(module) %>, require("../../src/plugin_packages/"+<%- JSON.stringify(module) %>)],
+-    <% } %>
+-  ]));
+   const padeditbar = require('ep_etherpad-lite/static/js/pad_editbar').padeditbar;
+   const padimpexp = require('ep_etherpad-lite/static/js/pad_impexp').padimpexp;
+   timeSlider.baseURL = baseURL;
+diff --git a/src/templates/timeslider.html b/src/templates/timeslider.html
+index 24bf2c912ec..6223a8964b9 100644
++++ b/src/templates/timeslider.html
+--- a/src/templates/timeslider.html
+@@ -56,7 +56,7 @@
+ </head>
+ 
+ <% e.begin_block("timesliderBody"); %>
++<body id="padbody" class="timeslider limwidth">
+-<body id="padbody" class="timeslider limwidth<% if (typeof embed !== 'undefined' && embed) { %> embedded-history-frame<% } %>">
+ 
+   <!----------------------------->
+   <!--------- TOOLBAR ----------->
+diff --git a/src/tests/backend/specs/socialMeta.ts b/src/tests/backend/specs/socialMeta.ts
+index 667b3ea73ef..34596e87996 100644
++++ b/src/tests/backend/specs/socialMeta.ts
+--- a/src/tests/backend/specs/socialMeta.ts
+@@ -112,9 +112,7 @@ describe(__filename, function () {
+ 
+   describe('timeslider', function () {
+     it('og:title contains the (history) marker', async function () {
++      const res = await agent.get('/p/TestPad7599/timeslider').expect(200);
+-      // Issue #7659: /p/:pad/timeslider redirects unless ?embed=1 — that
+-      // query is the iframe path that still serves the timeslider HTML.
+-      const res = await agent.get('/p/TestPad7599/timeslider?embed=1').expect(200);
+       const title = ogTag(res.text, 'og:title');
+       assert.ok(title && title.includes('(history)'),
+           `unexpected timeslider og:title: ${title}`);
+diff --git a/src/tests/backend/specs/specialpages.ts b/src/tests/backend/specs/specialpages.ts
+index 17b7c49a86a..d41aade6446 100644
++++ b/src/tests/backend/specs/specialpages.ts
+--- a/src/tests/backend/specs/specialpages.ts
+@@ -93,9 +93,7 @@ describe(__filename, function () {
+     it('timeslider page emits theme-color matching the configured toolbar', async function () {
+       settings.skinName = 'colibris';
+       settings.skinVariants = 'super-dark-toolbar super-dark-editor dark-background';
++      const res = await agent.get('/p/testpad/timeslider').expect(200);
+-      // Issue #7659: /p/:pad/timeslider redirects unless ?embed=1 — that
+-      // query is the iframe path that still serves the timeslider HTML.
+-      const res = await agent.get('/p/testpad/timeslider?embed=1').expect(200);
+       assert.match(res.text, /<meta name="theme-color" content="#485365">/);
+       assert.doesNotMatch(res.text, /prefers-color-scheme/);
+     });
+@@ -103,7 +101,7 @@ describe(__filename, function () {
+     it('timeslider page omits theme-color for non-colibris skins', async function () {
+       settings.skinName = 'no-skin';
+       settings.skinVariants = 'super-light-toolbar';
++      const res = await agent.get('/p/testpad/timeslider').expect(200);
+-      const res = await agent.get('/p/testpad/timeslider?embed=1').expect(200);
+       assert.doesNotMatch(res.text, /theme-color/);
+     });
+   });
+diff --git a/src/tests/backend/specs/timesliderRedirect.ts b/src/tests/backend/specs/timesliderRedirect.ts
+deleted file mode 100644
+index 22ea3f70c3b..00000000000
++++ /dev/null
+--- a/src/tests/backend/specs/timesliderRedirect.ts
+@@ -1,45 +0,0 @@
+-'use strict';
+-
+-// Issue #7659 — direct visits to /p/:pad/timeslider should now 302-redirect
+-// to the pad page; the pad's PadModeController handles entering history mode
+-// from the URL hash. Iframe consumers pass ?embed=1 and still receive the
+-// timeslider HTML for embedded use.
+-
+-const assert = require('assert').strict;
+-const common = require('../common');
+-
+-describe(__filename, function () {
+-  let agent: any;
+-
+-  before(async function () {
+-    agent = await common.init();
+-  });
+-
+-  describe('/p/:pad/timeslider', function () {
+-    it('redirects (302) direct visits to the pad page', async function () {
+-      const res = await agent.get('/p/testRedirect-7659/timeslider').expect(302);
+-      assert.match(res.headers.location, /testRedirect-7659/);
+-      // Must not point back at /timeslider — that would loop.
+-      assert.doesNotMatch(res.headers.location, /\/timeslider(\?|$)/);
+-    });
+-
+-    it('preserves the pad name in the redirect target', async function () {
+-      // Etherpad normalizes spaces to underscores in pad names; the
+-      // redirect target should match whatever the route handler resolved
+-      // req.params.pad to, percent-escaped where needed.
+-      const padName = 'Pad-With-Hyphens-7659';
+-      const res = await agent
+-          .get(`/p/${encodeURIComponent(padName)}/timeslider`)
+-          .expect(302);
+-      assert.match(res.headers.location, /Pad-With-Hyphens-7659/);
+-    });
+-
+-    it('serves the timeslider HTML when embed=1 (iframe path)', async function () {
+-      const res = await agent
+-          .get('/p/testEmbed-7659/timeslider?embed=1')
+-          .expect(200);
+-      assert.match(res.headers['content-type'], /text\/html/);
+-      assert.match(res.text, /class="[^"]*embedded-history-frame/);
+-    });
+-  });
+-});
+diff --git a/src/tests/frontend-new/helper/timeslider.ts b/src/tests/frontend-new/helper/timeslider.ts
+index 536a4462d79..e193048e01f 100644
++++ b/src/tests/frontend-new/helper/timeslider.ts
+--- a/src/tests/frontend-new/helper/timeslider.ts
+@@ -15,10 +15,6 @@ import {Page} from "@playwright/test";
+  */
+ export const gotoTimeslider = async (page: Page, revision: number): Promise<any> => {
+     let revisionString = Number.isInteger(revision) ? `#${revision}` : '';
++    await page.goto(`${page.url()}/timeslider${revisionString}`);
+-    // Issue #7659: /p/:pad/timeslider now 302-redirects to the pad page so the
+-    // in-pad PadModeController owns history mode. Tests that target the
+-    // timeslider DOM directly bypass the redirect by passing ?embed=1, the
+-    // same query the in-pad iframe uses.
+-    await page.goto(`${page.url()}/timeslider?embed=1${revisionString}`);
+     await page.waitForSelector('#timer')
+ };
+diff --git a/src/tests/frontend-new/specs/padmode.spec.ts b/src/tests/frontend-new/specs/padmode.spec.ts
+deleted file mode 100644
+index b8e2451d8b8..00000000000
++++ /dev/null
+--- a/src/tests/frontend-new/specs/padmode.spec.ts
+@@ -1,348 +0,0 @@
+-import {expect, test} from '@playwright/test';
+-import {clearPadContent, goToNewPad, writeToPad} from '../helper/padHelper';
+-
+-// Issue #7659 — in-pad history mode.
+-//
+-// The pad and timeslider used to be on different URLs. Clicking the history
+-// toolbar button now keeps the user on the same URL and toggles a hash-based
+-// state instead. This spec exercises the entry, exit, direct-load, and
+-// browser-back paths, and asserts the rendered (localized) banner string
+-// rather than just element presence.
+-
+-test.describe('in-pad history mode', () => {
+-  test('toolbar button enters history without leaving the pad URL', async ({page}) => {
+-    const padId = await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'Hello');
+-    await page.waitForTimeout(500);
+-    await writeToPad(page, ' world');
+-    await page.waitForTimeout(500);
+-
+-    const padPath = new URL(page.url()).pathname;
+-
+-    await page.locator('.buttonicon-history').click();
+-
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    const banner = page.locator('#history-banner');
+-    await expect(banner).toBeVisible();
+-
+-    // Banner is localized — assert the rendered string, not just presence.
+-    await expect(banner.locator('.history-banner-label'))
+-        .toHaveText('Viewing history');
+-    await expect(banner.locator('#history-banner-return'))
+-        .toHaveText('Return to live');
+-
+-    // Pathname unchanged; only the hash is added.
+-    expect(new URL(page.url()).pathname).toBe(padPath);
+-    expect(page.url()).toMatch(/#rev\//);
+-
+-    // The iframe mounted with the embedded timeslider markup; its own
+-    // editbar is hidden because the slider lives in the outer toolbar
+-    // (#history-controls).
+-    const frame = page.frameLocator('#history-frame');
+-    await expect(frame.locator('body.embedded-history-frame')).toBeVisible();
+-    await expect(frame.locator('#editbar')).toBeHidden();
+-    await expect(page.locator('#history-slider-input')).toBeVisible();
+-    expect(padId).toBeTruthy();
+-  });
+-
+-  test('Return-to-live exits history and clears the hash', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'A');
+-    await page.waitForTimeout(300);
+-    await writeToPad(page, 'B');
+-    await page.waitForTimeout(300);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    await page.locator('#history-banner-return').click();
+-    await expect(page.locator('body.history-mode')).toHaveCount(0);
+-    await expect(page.locator('#history-banner')).toBeHidden();
+-    expect(new URL(page.url()).hash).toBe('');
+-  });
+-
+-  test('browser back exits history mode', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'X');
+-    await page.waitForTimeout(300);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    await page.goBack();
+-    await expect(page.locator('body.history-mode')).toHaveCount(0);
+-    await expect(page.locator('#history-banner')).toBeHidden();
+-  });
+-
+-  test('legacy /p/:pad/timeslider URL redirects to the pad page', async ({page}) => {
+-    const padId = await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'Y');
+-    await page.waitForTimeout(300);
+-
+-    const res = await page.goto(`http://localhost:9001/p/${padId}/timeslider`);
+-    // Final landing URL is the pad page, not /timeslider.
+-    expect(new URL(page.url()).pathname).toBe(`/p/${padId}`);
+-    // Accept 304 — Firefox issues a conditional GET because goToNewPad
+-    // already loaded the same URL and the response is identical.
+-    expect([200, 304]).toContain(res?.status());
+-  });
+-
+-  // Phase B — chrome consolidation, chat replay, authors panel, exports.
+-
+-  test('Follow + Playback speed are inline in the toolbar in history mode', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'one');
+-    await page.waitForTimeout(300);
+-
+-    // Live mode: history-controls hidden, so Follow + Speed are not visible.
+-    await expect(page.locator('#history-options-followContents')).toBeHidden();
+-    await expect(page.locator('#history-playbackspeed')).toBeHidden();
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    // Both controls live inside #history-controls in the toolbar — no need
+-    // to open the Settings popup.
+-    await expect(page.locator('#history-controls #history-options-followContents'))
+-        .toBeAttached();
+-    await expect(page.locator('#history-controls #history-playbackspeed'))
+-        .toBeAttached();
+-  });
+-
+-  test('embedded iframe shows only the editor surface (no inner editbar)', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'A');
+-    await page.waitForTimeout(300);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    const frame = page.frameLocator('#history-frame');
+-    // The whole inner editbar is hidden — slider + play buttons live in
+-    // the outer pad's toolbar now (#history-controls). Iframe is editor.
+-    await expect(frame.locator('#editbar')).toBeHidden();
+-    // Editor body itself is still rendered.
+-    await expect(frame.locator('#outerdocbody')).toBeVisible();
+-  });
+-
+-  test('outer toolbar swaps formatting menu for history controls', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'A');
+-    await page.waitForTimeout(300);
+-
+-    // Live mode: history-controls is in DOM but hidden; menu_left visible.
+-    await expect(page.locator('#history-controls')).toBeHidden();
+-    await expect(page.locator('#editbar .menu_left')).toBeVisible();
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    // History mode: menu_left hidden, history-controls + slider visible.
+-    const leftDisplay = await page.locator('#editbar .menu_left').evaluate(
+-        (el) => getComputedStyle(el).display);
+-    expect(leftDisplay).toBe('none');
+-    await expect(page.locator('#history-controls')).toBeVisible();
+-    await expect(page.locator('#history-slider-input')).toBeVisible();
+-    // Right-side menu (Settings/Share/Users/Chat/Home) stays fully active.
+-    await expect(page.locator('button[data-l10n-id=\'pad.toolbar.settings.title\']'))
+-        .toBeVisible();
+-  });
+-
+-  test('outer slider drives the embedded timeslider revision', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'one');
+-    await page.waitForTimeout(300);
+-    await writeToPad(page, ' two');
+-    await page.waitForTimeout(300);
+-    await writeToPad(page, ' three');
+-    await page.waitForTimeout(800);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    // Wait until BroadcastSlider has populated the outer slider's max.
+-    await page.waitForFunction(() => {
+-      const i = document.getElementById('history-slider-input') as HTMLInputElement | null;
+-      return !!i && Number(i.max) > 0;
+-    }, {timeout: 10_000});
+-
+-    // Move the outer slider to revision 0 and assert the iframe followed.
+-    await page.locator('#history-slider-input').evaluate((el: HTMLInputElement) => {
+-      el.value = '0';
+-      el.dispatchEvent(new Event('input', {bubbles: true}));
+-    });
+-    await page.waitForFunction(() => {
+-      const f = document.getElementById('history-frame') as HTMLIFrameElement | null;
+-      const win: any = f && f.contentWindow;
+-      return !!win?.BroadcastSlider && win.BroadcastSlider.getSliderPosition() === 0;
+-    }, {timeout: 5_000});
+-
+-    expect(page.url()).toMatch(/#rev\/0$/);
+-  });
+-
+-  test('dark mode propagates into the history iframe', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'A');
+-    await page.waitForTimeout(300);
+-
+-    // Apply dark-mode skin tokens directly to the outer <html>; this
+-    // mirrors what the dark-mode checkbox does at runtime. The iframe
+-    // should inherit them on first paint via timeslider.ts's
+-    // parent-class lookup.
+-    await page.evaluate(() => {
+-      const html = document.documentElement;
+-      ['super-dark-editor', 'dark-background', 'super-dark-toolbar']
+-          .forEach((c) => html.classList.add(c));
+-    });
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    await page.waitForTimeout(800);
+-
+-    const innerClasses = await page.locator('#history-frame').evaluate(
+-        (iframe: any) => iframe.contentDocument!.documentElement.className);
+-    expect(innerClasses).toMatch(/super-dark-editor/);
+-    expect(innerClasses).toMatch(/dark-background/);
+-    expect(innerClasses).toMatch(/super-dark-toolbar/);
+-  });
+-
+-  test('chat panel is filtered to messages newer than the historical revision', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'rev1');
+-    await page.waitForTimeout(400);
+-
+-    // Inject two chat messages with controlled timestamps so we can assert
+-    // filtering deterministically without driving the chat widget. The chat
+-    // panel is closed by default so we read display style directly rather
+-    // than relying on Playwright's visibility (which considers ancestors).
+-    await page.evaluate(() => {
+-      const ct = document.getElementById('chattext')!;
+-      const earlier = document.createElement('p');
+-      earlier.setAttribute('data-timestamp', String(Date.now() - 60_000));
+-      earlier.classList.add('chat-msg-test-earlier');
+-      earlier.textContent = 'old';
+-      const later = document.createElement('p');
+-      later.setAttribute('data-timestamp', String(Date.now() + 60_000));
+-      later.classList.add('chat-msg-test-later');
+-      later.textContent = 'future';
+-      ct.append(earlier, later);
+-    });
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    // Wait for the inner BroadcastSlider hook to fire at least once.
+-    await page.waitForFunction(() => {
+-      const p = document.querySelector('.chat-msg-test-later') as HTMLElement | null;
+-      return !!p && p.style.display === 'none';
+-    }, {timeout: 10_000});
+-
+-    // Earlier message has its inline display cleared (still rendered);
+-    // later message has display:none injected by the filter.
+-    const earlierDisplay = await page.locator('.chat-msg-test-earlier').evaluate(
+-        (el) => (el as HTMLElement).style.display);
+-    expect(earlierDisplay).not.toBe('none');
+-    const laterDisplay = await page.locator('.chat-msg-test-later').evaluate(
+-        (el) => (el as HTMLElement).style.display);
+-    expect(laterDisplay).toBe('none');
+-    // Chat replay header has the localized prefix.
+-    const headerText = await page.locator('#history-chat-header').textContent();
+-    expect(headerText).toMatch(/Chat as of/);
+-  });
+-
+-  test('outer Export hrefs point at the historical revision in history mode', async ({page}) => {
+-    const padId = await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'one');
+-    await page.waitForTimeout(400);
+-    await writeToPad(page, ' two');
+-    await page.waitForTimeout(800);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    await page.waitForTimeout(700);
+-
+-    const href = await page.locator('#exporthtmla').getAttribute('href');
+-    expect(href).not.toBeNull();
+-    // Format is /p/<padId>/<rev>/export/html — assert the revision segment.
+-    expect(href).toMatch(new RegExp(`/p/${padId}/\\d+/export/html`));
+-
+-    await page.locator('#history-banner-return').click();
+-    await expect(page.locator('body.history-mode')).toHaveCount(0);
+-    const restored = await page.locator('#exporthtmla').getAttribute('href');
+-    expect(restored).toMatch(new RegExp(`/p/${padId}/export/html$`));
+-  });
+-
+-  test('line numbers align with each line of text in history mode', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'one');
+-    await page.keyboard.press('Enter');
+-    await writeToPad(page, 'two');
+-    await page.keyboard.press('Enter');
+-    await writeToPad(page, 'three');
+-    await page.waitForTimeout(800);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-
+-    // Wait for the iframe's broadcast.ts to populate #sidedivinner with
+-    // line-number children and align them to the editor body.
+-    const frame = page.frameLocator('#history-frame');
+-    await frame.locator('#sidediv.sidedivdelayed').waitFor({state: 'attached', timeout: 10_000});
+-    await page.waitForTimeout(500);
+-
+-    const counts = await page.locator('#history-frame').evaluate((iframe: any) => {
+-      const idoc = iframe.contentDocument!;
+-      return {
+-        editorLines: idoc.querySelector('#innerdocbody')?.children.length ?? 0,
+-        gutterLines: idoc.querySelector('#sidedivinner')?.children.length ?? 0,
+-      };
+-    });
+-    expect(counts.editorLines).toBeGreaterThan(0);
+-    expect(counts.gutterLines).toBe(counts.editorLines);
+-
+-    // Vertical alignment: every gutter row's top should match its
+-    // corresponding editor row's top within a small tolerance (line-height
+-    // rounding can introduce sub-pixel drift).
+-    const offsets = await page.locator('#history-frame').evaluate((iframe: any) => {
+-      const idoc = iframe.contentDocument!;
+-      const editor = [...idoc.querySelectorAll('#innerdocbody > div')];
+-      const gutter = [...idoc.querySelectorAll('#sidedivinner > div')];
+-      return editor.map((e: HTMLElement, i: number) => ({
+-        diff: Math.abs(e.offsetTop - (gutter[i] as HTMLElement).offsetTop),
+-      }));
+-    });
+-    for (const {diff} of offsets) {
+-      expect(diff).toBeLessThanOrEqual(2);
+-    }
+-  });
+-
+-  test('users panel shows authors-at-this-revision in history mode', async ({page}) => {
+-    await goToNewPad(page);
+-    await clearPadContent(page);
+-    await writeToPad(page, 'hello');
+-    await page.waitForTimeout(400);
+-
+-    await page.locator('.buttonicon-history').click();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    await page.waitForTimeout(700);
+-
+-    // The authors row replaces the live-users table contents while in
+-    // history mode. Restored on exit.
+-    const tbl = page.locator('#otheruserstable');
+-    await expect(tbl.locator('.history-authors-row')).toBeAttached();
+-
+-    await page.locator('#history-banner-return').click();
+-    await expect(page.locator('body.history-mode')).toHaveCount(0);
+-    await expect(tbl.locator('.history-authors-row')).toHaveCount(0);
+-  });
+-});
+diff --git a/src/tests/frontend-new/specs/timeslider.spec.ts b/src/tests/frontend-new/specs/timeslider.spec.ts
+index 34fb1f7b15c..feb6a2b1636 100644
++++ b/src/tests/frontend-new/specs/timeslider.spec.ts
+--- a/src/tests/frontend-new/specs/timeslider.spec.ts
+@@ -7,38 +7,31 @@ test.beforeEach(async ({ page })=>{
+ })
+ 
+ 
++// deactivated, we need a nice way to get the timeslider, this is ugly
++test.describe('timeslider button takes you to the timeslider of a pad', function () {
+-// Issue #7659: clicking the history toolbar button enters history mode
+-// in-place. The pad URL stays the same; only the hash changes to #rev/...
+-test.describe('history toolbar button enters in-pad history mode', function () {
+ 
++  test('timeslider contained in URL', async function ({page}) {
+-  test('history mode mounts iframe and sets #rev/ hash', async function ({page}) {
+     const padBody = await getPadBody(page);
+     await clearPadContent(page)
++    await writeToPad(page, 'Foo'); // send line 1 to the pad
+-    await writeToPad(page, 'Foo');
+ 
++    // get the first text element inside the editable space
+     const $firstTextElement = padBody.locator('div span').first();
++    const originalValue = await $firstTextElement.textContent(); // get the original value
+-    const originalValue = await $firstTextElement.textContent();
+     await $firstTextElement.click()
++    await writeToPad(page, 'Testing'); // send line 1 to the pad
+-    await writeToPad(page, 'Testing');
+ 
++    const modifiedValue = await $firstTextElement.textContent(); // get the modified value
++    expect(modifiedValue).not.toBe(originalValue); // expect the value to change
+-    const modifiedValue = await $firstTextElement.textContent();
+-    expect(modifiedValue).not.toBe(originalValue);
+ 
+     const $timesliderButton = page.locator('.buttonicon-history');
++    await $timesliderButton.click(); // So click the timeslider link
++
++    await page.waitForSelector('#timeslider-wrapper')
++
++    const iFrameURL = page.url(); // get the url
++    const inTimeslider = iFrameURL.indexOf('timeslider') !== -1;
++
++    expect(inTimeslider).toBe(true); // expect the value to change
+-    await $timesliderButton.click();
+-
+-    // Banner appears, body gets the history-mode class, hash is #rev/...
+-    await expect(page.locator('#history-banner')).toBeVisible();
+-    await expect(page.locator('body.history-mode')).toBeVisible();
+-    expect(page.url()).toMatch(/#rev\//);
+-    // The pad URL itself never changes to /timeslider — that route is
+-    // reserved for the embedded iframe.
+-    expect(new URL(page.url()).pathname).not.toContain('timeslider');
+-
+-    // The iframe is mounted and the outer history-controls (slider, play,
+-    // step buttons) take over the toolbar's left zone.
+-    await expect(page.locator('#history-controls')).toBeVisible();
+-    await expect(page.locator('#history-slider-input')).toBeVisible();
+-    await expect(page.locator('#history-playpause')).toBeVisible();
+   });
+ });
+diff --git a/src/tests/frontend-new/specs/timeslider_identity_changeset.spec.ts b/src/tests/frontend-new/specs/timeslider_identity_changeset.spec.ts
+index 22c0587313e..22eb6f65287 100644
++++ b/src/tests/frontend-new/specs/timeslider_identity_changeset.spec.ts
+--- a/src/tests/frontend-new/specs/timeslider_identity_changeset.spec.ts
+@@ -40,7 +40,7 @@ test.describe('Timeslider with identity changesets (bug #5214)', function () {
+     await page.waitForTimeout(1000);
+ 
+     // Navigate to timeslider at revision 0 so playback has revisions to advance through
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider#0`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1#0`);
+     await page.waitForSelector('#timeslider-slider', {timeout: 10000});
+     await page.waitForTimeout(1000);
+ 
+@@ -82,7 +82,7 @@ test.describe('Timeslider with identity changesets (bug #5214)', function () {
+     await page.waitForTimeout(1000);
+ 
+     // Go to timeslider
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1`);
+     await page.waitForSelector('#timeslider-slider', {timeout: 10000});
+ 
+     // Get the total number of revisions from the slider
+@@ -92,7 +92,7 @@ test.describe('Timeslider with identity changesets (bug #5214)', function () {
+ 
+     // Scrub through each revision from 0 to latest
+     for (let rev = 0; rev <= sliderLength; rev++) {
++      await page.goto(`http://localhost:9001/p/${padId}/timeslider#${rev}`);
+-      await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1#${rev}`);
+       await page.waitForTimeout(300);
+ 
+       // Check no errors appeared
+diff --git a/src/tests/frontend-new/specs/timeslider_line_numbers.spec.ts b/src/tests/frontend-new/specs/timeslider_line_numbers.spec.ts
+index e5edad30028..86037269961 100644
++++ b/src/tests/frontend-new/specs/timeslider_line_numbers.spec.ts
+--- a/src/tests/frontend-new/specs/timeslider_line_numbers.spec.ts
+@@ -1,5 +1,6 @@
+ import {expect, test} from "@playwright/test";
+ import {clearPadContent, goToNewPad, writeToPad} from "../helper/padHelper";
++import {showSettings} from "../helper/settingsHelper";
+ 
+ test.describe('timeslider line numbers', function () {
+   test.beforeEach(async ({context}) => {
+@@ -12,7 +13,7 @@ test.describe('timeslider line numbers', function () {
+     await writeToPad(page, 'One\nTwo\nThree');
+     await page.waitForTimeout(1000);
+ 
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1`);
+     await page.waitForSelector('#timeslider-wrapper', {state: 'visible'});
+     await page.waitForSelector('#sidediv.sidedivdelayed', {state: 'attached'});
+     await page.waitForTimeout(1000);
+@@ -52,21 +53,14 @@ test.describe('timeslider line numbers', function () {
+       url: 'http://localhost:9001',
+     }]);
+ 
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1`);
+     await page.waitForSelector('#timeslider-wrapper', {state: 'visible'});
++    await showSettings(page);
+ 
+-    // Issue #7659: in embedded mode the outer pad owns the Settings popup,
+-    // so the inner #settings popup is hidden via CSS. The cookie-driven
+-    // initial state still applies to the iframe's body and checkbox; this
+-    // test verifies that contract by reading state without opening the
+-    // popup, then flipping the checkbox programmatically.
+     await expect(page.locator('#options-linenoscheck')).not.toBeChecked();
+     await expect(page.locator('body')).toHaveClass(/line-numbers-hidden/);
+ 
++    await page.locator('label[for="options-linenoscheck"]').click();
+-    await page.locator('#options-linenoscheck').evaluate((el: HTMLInputElement) => {
+-      el.checked = true;
+-      el.dispatchEvent(new Event('change'));
+-    });
+     await expect(page.locator('#options-linenoscheck')).toBeChecked();
+     await expect(page.locator('body')).not.toHaveClass(/line-numbers-hidden/);
+ 
+diff --git a/src/tests/frontend-new/specs/timeslider_playback_speed.spec.ts b/src/tests/frontend-new/specs/timeslider_playback_speed.spec.ts
+index 9a017165d4b..4167801de45 100644
++++ b/src/tests/frontend-new/specs/timeslider_playback_speed.spec.ts
+--- a/src/tests/frontend-new/specs/timeslider_playback_speed.spec.ts
+@@ -21,7 +21,7 @@ test.describe('timeslider playback speed', function () {
+     await writeToPad(page, 'One');
+     await page.waitForTimeout(1000);
+ 
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider#0`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1#0`);
+     await waitForTimesliderReady(page);
+ 
+     await expect.poll(async () => await page.evaluate(() => {
+@@ -46,7 +46,7 @@ test.describe('timeslider playback speed', function () {
+     await writeToPad(page, ' Two');
+     await page.waitForTimeout(1000);
+ 
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider#1`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1#1`);
+     await waitForTimesliderReady(page);
+ 
+     await page.evaluate(() => {
+@@ -79,7 +79,7 @@ test.describe('timeslider playback speed', function () {
+     await writeToPad(page, 'A');
+     await page.waitForTimeout(1000);
+ 
++    await page.goto(`http://localhost:9001/p/${padId}/timeslider#0`);
+-    await page.goto(`http://localhost:9001/p/${padId}/timeslider?embed=1#0`);
+     await waitForTimesliderReady(page);
+ 
+     const scheduledDelays = await page.evaluate(() => {

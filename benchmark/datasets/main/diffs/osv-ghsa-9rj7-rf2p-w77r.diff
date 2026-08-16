@@ -1,0 +1,88 @@
+diff --git a/git/repo/base.py b/git/repo/base.py
+index df61e2d28..e4d5e92c3 100644
++++ b/git/repo/base.py
+--- a/git/repo/base.py
+@@ -142,14 +142,6 @@ class Repo:
+     re_author_committer_start = re.compile(r"^(author|committer)")
+     re_tab_full_line = re.compile(r"^\t(.*)$")
+ 
+-    unsafe_git_init_options = [
+-        # Can install hooks that execute during later Git commands:
+-        "--template",
+-        # Redirects the repository metadata to a caller-controlled path:
+-        "--separate-git-dir",
+-    ]
+-    """Options to :manpage:`git-init(1)` that permit unsafe code execution or I/O."""
+-
+     unsafe_git_clone_options = [
+         # Executes arbitrary commands:
+         "--upload-pack",
+@@ -1406,7 +1398,6 @@ def init(
+         mkdir: bool = True,
+         odbt: Type[GitCmdObjectDB] = GitCmdObjectDB,
+         expand_vars: bool = True,
+-        allow_unsafe_options: bool = False,
+         **kwargs: Any,
+     ) -> "Repo":
+         """Initialize a git repository at the given path if specified.
+@@ -1431,10 +1422,6 @@ def init(
+             information disclosure, allowing attackers to access the contents of
+             environment variables.
+ 
+-        :param allow_unsafe_options:
+-            Allow unsafe options to be used, such as ``--template`` and
+-            ``--separate-git-dir``.
+-
+         :param kwargs:
+             Keyword arguments serving as additional options to the
+             :manpage:`git-init(1)` command.
+@@ -1442,11 +1429,6 @@ def init(
+         :return:
+             :class:`Repo` (the newly created repo)
+         """
+-        if not allow_unsafe_options:
+-            Git.check_unsafe_options(
+-                options=Git._option_candidates([], kwargs),
+-                unsafe_options=cls.unsafe_git_init_options,
+-            )
+         if path:
+             path = expand_path(path, expand_vars)
+         if mkdir and path and not osp.exists(path):
+diff --git a/test/test_repo.py b/test/test_repo.py
+index a465c84a3..5c4b416ff 100644
++++ b/test/test_repo.py
+--- a/test/test_repo.py
+@@ -82,33 +82,6 @@ def test_new_should_raise_on_invalid_repo_location(self):
+         with tempfile.TemporaryDirectory() as tdir:
+             self.assertRaises(InvalidGitRepositoryError, Repo, tdir)
+ 
+-    def test_init_rejects_unsafe_options(self):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            template_dir = osp.join(tdir, "template")
+-            os.mkdir(template_dir)
+-            unsafe_options = [
+-                {"template": template_dir},
+-                {"templa": template_dir},
+-                {"separate_git_dir": osp.join(tdir, "git-dir")},
+-                {"separate_git_di": osp.join(tdir, "git-dir")},
+-            ]
+-            for index, kwargs in enumerate(unsafe_options):
+-                repo_dir = osp.join(tdir, f"repo-{index}")
+-                with self.assertRaises(UnsafeOptionError):
+-                    Repo.init(repo_dir, **kwargs)
+-                assert not osp.exists(repo_dir)
+-
+-    def test_init_allows_explicitly_unsafe_options(self):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            template_dir = osp.join(tdir, "template")
+-            os.mkdir(template_dir)
+-            repo = Repo.init(
+-                osp.join(tdir, "repo"),
+-                template=template_dir,
+-                allow_unsafe_options=True,
+-            )
+-            assert repo.git_dir
+-
+     @with_rw_directory
+     def test_new_should_raise_on_invalid_repo_location_within_repo(self, rw_dir):
+         repo_dir = osp.join(rw_dir, "repo")

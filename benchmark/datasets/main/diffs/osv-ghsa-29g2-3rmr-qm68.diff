@@ -1,0 +1,39 @@
+diff --git a/.changeset/tidy-parrots-attack.md b/.changeset/tidy-parrots-attack.md
+deleted file mode 100644
+index db2a810b7c40..000000000000
++++ /dev/null
+--- a/.changeset/tidy-parrots-attack.md
+@@ -1,5 +0,0 @@
+----
+-'@sveltejs/kit': patch
+----
+-
+-fix: prevent quadratic backtracking in `Accept` header content negotiation
+diff --git a/packages/kit/src/utils/http.js b/packages/kit/src/utils/http.js
+index 3b0dfb50e5d8..6c8b8daf7151 100644
++++ b/packages/kit/src/utils/http.js
+--- a/packages/kit/src/utils/http.js
+@@ -12,7 +12,7 @@ export function negotiate(accept, types) {
+ 	const parts = [];
+ 
+ 	accept.split(',').forEach((str, i) => {
++		const match = /([^/ \t]+)\/([^; \t]+)[ \t]*(?:;[ \t]*q=([0-9.]+))?/.exec(str);
+-		const match = /^[ \t]*([^/ \t]+)\/([^; \t]+)[ \t]*(?:;[ \t]*q=([0-9.]+))?/.exec(str);
+ 
+ 		// no match equals invalid header — ignore
+ 		if (match) {
+diff --git a/packages/kit/src/utils/http.spec.js b/packages/kit/src/utils/http.spec.js
+index 0f7fb647d7d4..1bc4ad398663 100644
++++ b/packages/kit/src/utils/http.spec.js
+--- a/packages/kit/src/utils/http.spec.js
+@@ -18,10 +18,6 @@ test('handle invalid accept header value', () => {
+ 	assert.equal(negotiate(accept, ['text/html']), 'text/html');
+ });
+ 
+-test('ignores an accept segment with no slash without catastrophic backtracking', () => {
+-	assert.equal(negotiate('a'.repeat(200_000), ['text/html']), undefined);
+-}, 100);
+-
+ test('get_set_cookies returns each set-cookie header separately', () => {
+ 	const headers = new Headers();
+ 	headers.append('set-cookie', 'session=abc123; Path=/; HttpOnly');

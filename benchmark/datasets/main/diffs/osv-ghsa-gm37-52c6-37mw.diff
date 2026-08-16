@@ -1,0 +1,104 @@
+diff --git a/docs/src/markdown/about/changelog.md b/docs/src/markdown/about/changelog.md
+index 7a9330acc..fbdd57264 100644
++++ b/docs/src/markdown/about/changelog.md
+--- a/docs/src/markdown/about/changelog.md
+@@ -3,13 +3,6 @@ icon: lucide/scroll-text
+ ---
+ # Changelog
+ 
+-## 11.0.1
+-
+--   **FIX**: BetterEm: Fix regex pattern inefficiencies. 
+--   **FIX**: Tilde: Fix regex pattern inefficiencies. 
+--   **FIX**: Caret: Fix regex pattern inefficiencies. 
+--   **FIX**: MagicLink: Fix regex pattern inefficiencies. 
+-
+ ## 11.0
+ 
+ -   **BREAK**: B64: Restricts relative links to `base_path` by default. Can be disabled by setting new `restrict_path`
+diff --git a/pymdownx/__meta__.py b/pymdownx/__meta__.py
+index 8ec3eac3f..876b616da 100644
++++ b/pymdownx/__meta__.py
+--- a/pymdownx/__meta__.py
+@@ -193,5 +193,5 @@ def parse_version(ver: str) -> Version:
+     return Version(major, minor, micro, release, pre, post, dev)
+ 
+ 
++__version_info__ = Version(11, 0, 0, "final")
+-__version_info__ = Version(11, 0, 1, "final")
+ __version__ = __version_info__._get_canonical()
+diff --git a/pymdownx/betterem.py b/pymdownx/betterem.py
+index 9b4c072b7..f6a4e4b0d 100644
++++ b/pymdownx/betterem.py
+--- a/pymdownx/betterem.py
+@@ -64,9 +64,9 @@
+ # _em __strong___
+ UNDER_EM_STRONG2 = r'(?<!_)(_)(?![_\s]){}_{{2}}{}_{{3}}'.format(UNDER_CONTENT, UNDER_CONTENT)
+ # Prioritize *value* when **value** is nested within
++STAR_EM2 = r'(?<!\*)(\*)(?![\*\s])((?:[^\*]|\*{2,})+?)(?<![\*\s])(\*)(?!\*)'
+-STAR_EM2 = r'(?<!\*)(\*)(?![\*\s])((?:[^\*]|\*{2,}(?!\*))+?)(?<![\*\s])(\*)(?!\*)'
+ # Prioritize _value_ when __value__ is nested within
++UNDER_EM2 = r'(?<!_)(_)(?![_\s])((?:[^_]|_{2,})+?)(?<![_\s])(_)(?!_)'
+-UNDER_EM2 = r'(?<!_)(_)(?![_\s])((?:[^_]|_{2,}(?!_))+?)(?<![_\s])(_)(?!_)'
+ # *emphasis*
+ STAR_EM = r'(\*)(?!\s){}(?<!\s)\1'.format(STAR_CONTENT)
+ # _emphasis_
+@@ -90,7 +90,7 @@
+ # SMART: _em_
+ SMART_UNDER_EM = r'(?<!\w)(_)(?![\s_]){}(?<!\s)\1(?!\w)'.format(SMART_UNDER_CONTENT)
+ # SMART: Prioritize _value_ when __value__ is nested within
++SMART_UNDER_EM2 = r'(?<![\w_])(_)(?![_\s])((?:[^_]|_{2,})+?)(?<![_\s])(_)(?!\w)'
+-SMART_UNDER_EM2 = r'(?<![\w_])(_)(?![_\s])((?:[^_]|_{2,}(?!_))+?)(?<![_\s])(_)(?!\w)'
+ # SMART: _em __strong___
+ SMART_UNDER_EM_STRONG2 = \
+     r'(?<!\w)(_)(?![\s_]){}(?<!\w)_{{2}}(?![\s_]){}(?<!\s)_{{3}}(?!\w)'.format(
+@@ -123,7 +123,7 @@
+ # SMART: *em*
+ SMART_STAR_EM = r'(?:(?<=_)|(?<![\w\*]))(\*)(?![\s\*]){}(?<!\s)\1(?:(?=_)|(?![\w\*]))'.format(SMART_STAR_CONTENT)
+ # SMART: Prioritize *value* when **value** is nested within
++SMART_STAR_EM2 = r'(?:(?<=_)|(?<![\w\*]))(\*)(?![\*\s])((?:[^\*]|\*{2,})+?)(?<![\*\s])(\*)(?:(?=_)|(?![\w\*]))'
+-SMART_STAR_EM2 = r'(?:(?<=_)|(?<![\w\*]))(\*)(?![\*\s])((?:[^\*]|\*{2,}(?!\*))+?)(?<![\*\s])(\*)(?:(?=_)|(?![\w\*]))'
+ # SMART: *em **strong***
+ SMART_STAR_EM_STRONG2 = \
+     r'(?:(?<=_)|(?<![\w\*]))(\*)(?![\s\*]){}(?:(?<=_)|(?<![\w\*]))\*{{2}}(?![\s\*]){}(?<!\s)\*{{3}}(?:(?=_)|(?![\w\*]))'.format(
+diff --git a/pymdownx/caret.py b/pymdownx/caret.py
+index 0c849fa82..747bc7ece 100755
++++ b/pymdownx/caret.py
+--- a/pymdownx/caret.py
+@@ -53,7 +53,7 @@
+ # `^sup ^^sup,ins^^^`
+ SUP_INS2 = r'(?<!\^)(\^)(?![\^\s]){}\^{{2}}{}\^{{3}}'.format(CONTENT, CONTENT)
+ # Prioritize ^value^ when ^^value^^ is nested within
++SUP2 = r'(?<!\^)(\^)(?![\^\s])((?:[^\^\s]|\^{2,})+?)(?<![\^\s])(\^)(?!\^)'
+-SUP2 = r'(?<!\^)(\^)(?![\^\s])((?:[^\^\s]|\^{2,}(?!\^))+?)(?<![\^\s])(\^)(?!\^)'
+ 
+ # Smart rules for when "smart caret" is enabled
+ # SMART: `^^^ins,sup^^^`
+diff --git a/pymdownx/magiclink.py b/pymdownx/magiclink.py
+index 77d0bf771..62c1dc94b 100644
++++ b/pymdownx/magiclink.py
+--- a/pymdownx/magiclink.py
+@@ -56,8 +56,8 @@
+ RE_LINK = r'''(?xi)
+ (?P<link>
+     (?:(?<=\b)|(?<=_))(?:
++        (?:ht|f)tps?://[^_\W][-\w]*(?:\.[-\w.]+)*|          # (http|ftp)://
++        (?P<www>w{3}\.)[^_\W][-\w]*(?:\.[-\w.]+)*           # www.
+-        (?:ht|f)tps?://[^_\W](?:[-\w]|\.(?!=$))*|           # (http|ftp)://host.name
+-        (?P<www>w{3}\.)[^_\W](?:[-\w]|\.(?!=$))*            # www.host.name
+     )
+     /?[-\w.?,!'(){}\[\]/+&@%$#=:"|~;]*                      # url path, fragments, and query stuff
+     (?:[^_\W]|[-/#@$+=])                                    # allowed end chars
+diff --git a/pymdownx/tilde.py b/pymdownx/tilde.py
+index f1fb3cdaa..e58c1f6a7 100755
++++ b/pymdownx/tilde.py
+--- a/pymdownx/tilde.py
+@@ -52,7 +52,7 @@
+ # `~sub ~~sub,del~~~`
+ SUB_DEL2 = r'(?<!~)(~)(?![~\s]){}~{{2}}{}~{{3}}'.format(CONTENT, CONTENT)
+ # Prioritize ~value~ when ~~value~~ is nested within
++SUB2 = r'(?<!~)(~)(?![~\s])((?:[^\s~]|~{2,})+?)(?<![~\s])(~)(?!~)'
+-SUB2 = r'(?<!~)(~)(?![~\s])((?:[^\s~]|~{2,}(?!~))+?)(?<![~\s])(~)(?!~)'
+ 
+ # Smart rules for when "smart tilde" is enabled
+ # SMART: `~~~del,sub~~~`

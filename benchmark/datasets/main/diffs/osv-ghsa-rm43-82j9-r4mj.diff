@@ -1,0 +1,319 @@
+diff --git a/atomic_agents/dashboard/serve.py b/atomic_agents/dashboard/serve.py
+index fb4ee591..5efe1a0c 100644
++++ b/atomic_agents/dashboard/serve.py
+--- a/atomic_agents/dashboard/serve.py
+@@ -19,9 +19,7 @@
+ from urllib.parse import urlparse
+ 
+ from .render import render_all
+-from .._io import safe_resolve_under
+ from .._platform import get_agents_root
+-from ..exceptions import PathTraversalError
+ 
+ 
+ PORT = 8765
+@@ -36,84 +34,54 @@ class DashboardHandler(BaseHTTPRequestHandler):
+       GET /<filename>             → file from <agents_root>/_dashboard/
+       GET /agents/<name>          → <agents_root>/<name>/dashboard.html
+       POST /regenerate            → rebuild all dashboards, return 200
+-
+-    All served paths are routed through safe_resolve_under() against the
+-    intended root before any file read, blocking path-traversal attacks.
+     """
+ 
+     agents_root: Path = None  # set by serve()
+ 
+     # Dashboard tab filenames served at root-level paths
+     _TAB_FILES = {
++        "/activity":      "activity.html",
+-        "/activity": "activity.html",
+         "/activity.html": "activity.html",
++        "/quality":       "quality.html",
++        "/quality.html":  "quality.html",
++        "/memory":        "memory.html",
++        "/memory.html":   "memory.html",
++        "/goals":         "goals.html",
++        "/goals.html":    "goals.html",
+-        "/quality": "quality.html",
+-        "/quality.html": "quality.html",
+-        "/memory": "memory.html",
+-        "/memory.html": "memory.html",
+-        "/goals": "goals.html",
+-        "/goals.html": "goals.html",
+     }
+ 
+     def do_GET(self):
+         path = urlparse(self.path).path
+ 
+         if path == "/" or path == "/index.html":
++            self._serve_file(self.agents_root / "_dashboard" / "index.html", "text/html")
+-            self._serve_under_dashboard("index.html", "text/html")
+             return
+ 
+         # New tab routes
+         if path in self._TAB_FILES:
++            tab_file = self._TAB_FILES[path]
++            self._serve_file(self.agents_root / "_dashboard" / tab_file, "text/html")
+-            self._serve_under_dashboard(self._TAB_FILES[path], "text/html")
+             return
+ 
+         if path.startswith("/agents/"):
++            agent_name = path[len("/agents/"):].rstrip("/")
++            self._serve_file(self.agents_root / agent_name / "dashboard.html", "text/html")
+-            agent_name = path[len("/agents/") :].rstrip("/")
+-            # Reject agent names that contain path separators or traversal
+-            # segments before resolve — safe_resolve_under will also catch
+-            # these, but an early explicit check avoids leaking which path
+-            # component caused the rejection.
+-            if "/" in agent_name or "\\" in agent_name or ".." in agent_name:
+-                self.send_error(404, "Not found")
+-                return
+-            try:
+-                resolved = safe_resolve_under(agent_name, self.agents_root)
+-            except PathTraversalError:
+-                self.send_error(404, "Not found")
+-                return
+-            self._serve_file_contained(resolved / "dashboard.html", "text/html")
+             return
+ 
+         # Static files under /_dashboard/
+         if path.startswith("/_dashboard/"):
++            file_path = self.agents_root / path.lstrip("/")
++            if file_path.exists() and file_path.is_file():
++                self._serve_file(file_path, _content_type_for(file_path))
++                return
+-            rel = path[len("/_dashboard/") :]
+-            self._serve_under_dashboard(rel, _content_type_for(Path(rel)))
+-            return
+ 
+         # Bare filename → look in _dashboard/
++        candidate = self.agents_root / "_dashboard" / path.lstrip("/")
++        if candidate.exists() and candidate.is_file():
++            self._serve_file(candidate, _content_type_for(candidate))
+-        bare = path.lstrip("/")
+-        self._serve_under_dashboard(bare, _content_type_for(Path(bare)))
+-
+-    def _serve_under_dashboard(self, relative: str, content_type: str) -> None:
+-        """Resolve *relative* under <agents_root>/_dashboard/ and serve it.
+-
+-        Returns 404 on PathTraversalError or if the file does not exist.
+-        Never leaks which path component caused a traversal rejection.
+-        """
+-        dashboard_root = self.agents_root / "_dashboard"
+-        try:
+-            resolved = safe_resolve_under(relative, dashboard_root)
+-        except PathTraversalError:
+-            self.send_error(404, "Not found")
+             return
+-        self._serve_file_contained(resolved, content_type)
+ 
++        self.send_error(404, "Not found")
+-    def _serve_file_contained(self, path: Path, content_type: str) -> None:
+-        """Serve *path* if it exists and is a regular file; 404 otherwise."""
+-        if not path.exists() or not path.is_file():
+-            self.send_error(404, "Not found")
+-            return
+-        self._serve_file(path, content_type)
+ 
+     def do_POST(self):
+         path = urlparse(self.path).path
+@@ -124,16 +92,12 @@ def do_POST(self):
+                 self.send_header("Content-Type", "application/json")
+                 self.send_header("Cache-Control", "no-store")
+                 self.end_headers()
++                self.wfile.write(json.dumps({"status": "ok", "written": written}).encode())
+-                self.wfile.write(
+-                    json.dumps({"status": "ok", "written": written}).encode()
+-                )
+             except Exception as e:
+                 self.send_response(500)
+                 self.send_header("Content-Type", "application/json")
+                 self.end_headers()
++                self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode())
+-                self.wfile.write(
+-                    json.dumps({"status": "error", "error": str(e)}).encode()
+-                )
+             return
+         self.send_error(404)
+ 
+diff --git a/tests/test_dashboard_serve_security.py b/tests/test_dashboard_serve_security.py
+deleted file mode 100644
+index 57127dea..00000000
++++ /dev/null
+--- a/tests/test_dashboard_serve_security.py
+@@ -1,175 +0,0 @@
+-"""Path-traversal security tests for atomic_agents.dashboard.serve.DashboardHandler.
+-
+-Verifies GHSA-rm43-82j9-r4mj fix: every served path is routed through
+-safe_resolve_under() so literal ``../`` traversal sequences are rejected
+-with HTTP 404 before any file read occurs.
+-
+-Test matrix
+------------
+-- GET /../../<file>                    → 404  (root-level traversal)
+-- GET /../../../../etc/hosts           → 404  (deep traversal, absolute target)
+-- GET /_dashboard/../../<file>         → 404  (escape via static branch)
+-- GET /agents/../../../<file>          → 404  (escape via agents branch)
+-- GET /                                → 200  (legitimate index route still works)
+-- GET /_dashboard/index.html           → 200  (legitimate static route still works)
+-- GET /agents/<name>                   → 200  (legitimate agent dashboard still works)
+-"""
+-
+-from __future__ import annotations
+-
+-import io
+-import socket
+-from http.server import HTTPServer
+-from pathlib import Path
+-from threading import Thread
+-
+-import pytest
+-
+-from atomic_agents.dashboard.serve import DashboardHandler
+-
+-
+-# ---------------------------------------------------------------------------
+-# Test harness — minimal in-process HTTP server backed by a tmp agents_root
+-# ---------------------------------------------------------------------------
+-
+-
+-class _Handler(DashboardHandler):
+-    """Subclass that suppresses request logging during tests."""
+-
+-    def log_message(self, fmt, *args):  # noqa: D401
+-        pass  # silence per-request stderr output in the test suite
+-
+-
+-def _make_server(agents_root: Path) -> HTTPServer:
+-    """Bind an ephemeral-port server against *agents_root*."""
+-    _Handler.agents_root = agents_root
+-    server = HTTPServer(("127.0.0.1", 0), _Handler)
+-    return server
+-
+-
+-def _get(server: HTTPServer, path: str) -> int:
+-    """Issue a raw GET *path* against *server* and return the HTTP status code."""
+-    host, port = server.server_address
+-    sock = socket.create_connection((host, port), timeout=5)
+-    try:
+-        request = f"GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n"
+-        sock.sendall(request.encode())
+-        response = b""
+-        while True:
+-            chunk = sock.recv(4096)
+-            if not chunk:
+-                break
+-            response += chunk
+-    finally:
+-        sock.close()
+-
+-    # Status line is "HTTP/1.x NNN ...\r\n"
+-    first_line = response.split(b"\r\n", 1)[0].decode(errors="replace")
+-    return int(first_line.split()[1])
+-
+-
+-# ---------------------------------------------------------------------------
+-# Fixtures
+-# ---------------------------------------------------------------------------
+-
+-
+-@pytest.fixture()
+-def agents_root(tmp_path: Path) -> Path:
+-    """Minimal agents_root sufficient for the dashboard serve tests.
+-
+-    Layout::
+-
+-        agents_root/
+-          _dashboard/
+-            index.html
+-          myagent/
+-            dashboard.html
+-        secret.txt          ← file that MUST NOT be reachable via traversal
+-    """
+-    dashboard_dir = tmp_path / "_dashboard"
+-    dashboard_dir.mkdir()
+-    (dashboard_dir / "index.html").write_text(
+-        "<!DOCTYPE html><html><body>Dashboard</body></html>", encoding="utf-8"
+-    )
+-
+-    agent_dir = tmp_path / "myagent"
+-    agent_dir.mkdir()
+-    (agent_dir / "dashboard.html").write_text(
+-        "<!DOCTYPE html><html><body>Agent</body></html>", encoding="utf-8"
+-    )
+-
+-    # Sentinel file that traversal attacks would try to reach
+-    (tmp_path / "secret.txt").write_text("TOP SECRET", encoding="utf-8")
+-
+-    return tmp_path
+-
+-
+-@pytest.fixture()
+-def server(agents_root: Path):
+-    """Ephemeral-port HTTP server; runs in a daemon thread for the test duration."""
+-    srv = _make_server(agents_root)
+-    t = Thread(target=srv.handle_request, daemon=True)
+-    # We'll handle one request at a time by calling handle_request in a loop.
+-    # Use serve_forever in a daemon thread instead so multiple requests work.
+-    srv_thread = Thread(target=srv.serve_forever, daemon=True)
+-    srv_thread.start()
+-    yield srv
+-    srv.shutdown()
+-
+-
+-# ---------------------------------------------------------------------------
+-# Security tests — traversal attacks MUST return 404
+-# ---------------------------------------------------------------------------
+-
+-
+-def test_root_level_traversal_returns_404(server, agents_root):
+-    """GET /../../secret.txt must return 404 (root-level traversal)."""
+-    status = _get(server, "/../../secret.txt")
+-    assert status == 404, f"Expected 404, got {status} — traversal not blocked"
+-
+-
+-def test_deep_traversal_to_etc_hosts_returns_404(server, agents_root):
+-    """GET /../../../../etc/hosts must return 404 (deep multi-segment traversal)."""
+-    status = _get(server, "/../../../../etc/hosts")
+-    assert status == 404, f"Expected 404, got {status} — traversal not blocked"
+-
+-
+-def test_static_branch_traversal_returns_404(server, agents_root):
+-    """GET /_dashboard/../../secret.txt must return 404 (escape via static branch)."""
+-    status = _get(server, "/_dashboard/../../secret.txt")
+-    assert status == 404, f"Expected 404, got {status} — traversal not blocked"
+-
+-
+-def test_agents_branch_traversal_returns_404(server, agents_root):
+-    """GET /agents/../../../secret.txt must return 404 (escape via agents branch)."""
+-    status = _get(server, "/agents/../../../secret.txt")
+-    assert status == 404, f"Expected 404, got {status} — traversal not blocked"
+-
+-
+-def test_agents_dotdot_in_name_returns_404(server, agents_root):
+-    """GET /agents/../../secret.txt must return 404 (.. in agent name segment)."""
+-    status = _get(server, "/agents/../../secret.txt")
+-    assert status == 404, f"Expected 404, got {status} — traversal not blocked"
+-
+-
+-# ---------------------------------------------------------------------------
+-# Positive tests — legitimate routes MUST still return 200
+-# ---------------------------------------------------------------------------
+-
+-
+-def test_index_route_returns_200(server, agents_root):
+-    """GET / must return 200 (legitimate index route unaffected by fix)."""
+-    status = _get(server, "/")
+-    assert status == 200, f"Expected 200 for GET /, got {status}"
+-
+-
+-def test_static_index_html_returns_200(server, agents_root):
+-    """GET /_dashboard/index.html must return 200 (static route unaffected)."""
+-    status = _get(server, "/_dashboard/index.html")
+-    assert status == 200, f"Expected 200 for GET /_dashboard/index.html, got {status}"
+-
+-
+-def test_agent_dashboard_returns_200(server, agents_root):
+-    """GET /agents/myagent must return 200 (agent dashboard route unaffected)."""
+-    status = _get(server, "/agents/myagent")
+-    assert status == 200, f"Expected 200 for GET /agents/myagent, got {status}"

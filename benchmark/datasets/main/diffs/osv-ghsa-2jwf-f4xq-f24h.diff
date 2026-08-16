@@ -1,0 +1,1522 @@
+diff --git a/src/node/db/API.ts b/src/node/db/API.ts
+index 0af1836e3c8..38d06297386 100644
++++ b/src/node/db/API.ts
+--- a/src/node/db/API.ts
+@@ -19,15 +19,10 @@
+  * limitations under the License.
+  */
+ 
+-import AttributeMap from '../../static/js/AttributeMap';
+ import {deserializeOps} from '../../static/js/Changeset';
+ import ChatMessage from '../../static/js/ChatMessage';
+ import {Builder} from "../../static/js/Builder";
+ import {Attribute} from "../../static/js/types/Attribute";
+-
+-// Mirror of `Pad.SYSTEM_AUTHOR_ID`. Inlined to avoid a circular load
+-// (API <-> Pad) at module init time.
+-const SYSTEM_AUTHOR_ID = 'a.etherpad-system';
+ import settings from '../utils/Settings';
+ const CustomError = require('../utils/customError');
+ const padManager = require('./PadManager');
+@@ -625,28 +620,9 @@ exports.restoreRevision = async (padID: string, rev: number, authorId = '') => {
+   // create a new changeset with a helper builder object
+   const builder = new Builder(oldText.length);
+ 
+-  // The author to attribute inserts to. If the caller supplied an
+-  // explicit authorId, that wins; otherwise fall back to the stable
+-  // system author. The replayed atext was built from historical
+-  // revisions that may legitimately have insert ops without an
+-  // author attribute (legacy server-internal flows / .etherpad
+-  // imports); appendRevision now requires every insert to carry
+-  // one, so we merge the marker in below.
+-  const replayAuthorId = authorId || SYSTEM_AUTHOR_ID;
+-
+   // assemble each line into the builder
++  eachAttribRun(atext.attribs, (start: number, end: number, attribs:Attribute[]) => {
++    builder.insert(atext.text.substring(start, end), attribs);
+-  eachAttribRun(atext.attribs, (start: number, end: number, attribs:string) => {
+-    // attribs here is the op.attribs *string* (the eachAttribRun
+-    // callback receives it as the third arg). Use AttributeMap to
+-    // merge in `author` while preserving canonical (sorted) order
+-    // so checkRep doesn't reject the result. The `.set` call is a
+-    // no-op when the existing attribs already contain an `author`
+-    // attribute that matches; when they contain a *different*
+-    // author it preserves the historical attribution (we only
+-    // set author when it's missing).
+-    const map = AttributeMap.fromString(attribs, pad.pool);
+-    if (!map.get('author')) map.set('author', replayAuthorId);
+-    builder.insert(atext.text.substring(start, end), map.toString());
+   });
+ 
+   const lastNewlinePos = oldText.lastIndexOf('\n');
+diff --git a/src/node/db/Pad.ts b/src/node/db/Pad.ts
+index de8e85fddbd..80d91bce052 100644
++++ b/src/node/db/Pad.ts
+--- a/src/node/db/Pad.ts
+@@ -104,58 +104,6 @@ class Pad {
+    */
+   static readonly SYSTEM_AUTHOR_ID = 'a.etherpad-system';
+ 
+-  /**
+-   * Validate that every `+` (insert) op in `aChangeset` carries an
+-   * `author` attribute that resolves through `pool`. Callers that have
+-   * already rebased onto pad.pool pass the post-rebase changeset, so
+-   * we accept the pad's own pool here.
+-   *
+-   * Throws an Error if any insert op is missing an author attribute,
+-   * carries an empty author, or references an attribute number that
+-   * is not present in the pool.
+-   *
+-   * Tolerates `=` and `-` ops with empty attribs (those are the
+-   * canonical form for keeps/deletes that don't change attribution).
+-   * Also tolerates pure-newline `+` ops: the client's line assembler
+-   * handles those regardless of attribs, and the API restoreRevision
+-   * path emits them at line boundaries.
+-   */
+-  private static _assertInsertOpsCarryAuthor(aChangeset: string, pool: AttributePool) {
+-    let unpacked;
+-    try {
+-      unpacked = unpack(aChangeset);
+-    } catch (e: any) {
+-      // unpack already throws a descriptive error; rethrow as-is so the
+-      // caller's failure mode stays the same.
+-      throw e;
+-    }
+-    for (const op of deserializeOps(unpacked.ops)) {
+-      if (op.opcode !== '+') continue;
+-      // Pure-newline inserts (e.g. `|1+1` for a single line break) are
+-      // tolerated — the client's line assembler handles them regardless
+-      // of attribs, and the API restoreRevision path emits them at
+-      // line boundaries.
+-      if (op.lines > 0 && op.chars === op.lines) continue;
+-      if (!op.attribs) {
+-        throw new Error(
+-            'insert op without an author attribute ' +
+-            `(empty attribs): ${aChangeset}`);
+-      }
+-      let authorIdSeen: string | undefined;
+-      try {
+-        authorIdSeen = AttributeMap.fromString(op.attribs, pool).get('author');
+-      } catch (e: any) {
+-        throw new Error(
+-            'insert op references an attribute number ' +
+-            `not present in the pool: ${aChangeset} (${e && e.message || e})`);
+-      }
+-      if (!authorIdSeen) {
+-        throw new Error(
+-            'insert op without an author attribute: ' + aChangeset);
+-      }
+-    }
+-  }
+-
+   private db: Database;
+   private atext: AText;
+   private pool: AttributePool;
+@@ -278,13 +226,6 @@ class Pad {
+    * @return {Promise<number|string>}
+    */
+   async appendRevision(aChangeset:string, authorId = '') {
+-    // Centralised "every insert op carries an author attribute"
+-    // invariant. The socket handler enforces the same rule at the wire
+-    // boundary; checking here covers the non-wire callers (HTTP API
+-    // setHTML/setText/restoreRevision, plugin paths that call
+-    // appendRevision directly).
+-    Pad._assertInsertOpsCarryAuthor(aChangeset, this.pool);
+-
+     const newAText = applyToAText(aChangeset, this.atext, this.pool);
+     if (newAText.text === this.atext.text && newAText.attribs === this.atext.attribs &&
+         this.head !== -1) {
+@@ -596,19 +537,9 @@ class Pad {
+         if (context.type !== 'text') throw new Error(`unsupported content type: ${context.type}`);
+         text = exports.cleanText(context.content);
+       }
++      const firstAttribs = authorId ? [['author', authorId] as [string, string]] : undefined;
+-      // When the initial pad text is non-empty but no authorId was
+-      // supplied (internal getPad calls during HTTP API setup,
+-      // padDefaultContent flows, plugin-driven pad creation), fall back
+-      // to the stable system author so the initial changeset's insert
+-      // op carries an `author` attribute. Mirrors the same substitution
+-      // setText/appendText already do via spliceText.
+-      const effectiveAuthorId =
+-          (text.length > 0 && !authorId) ? Pad.SYSTEM_AUTHOR_ID : authorId;
+-      const firstAttribs = effectiveAuthorId
+-          ? [['author', effectiveAuthorId] as [string, string]]
+-          : undefined;
+       const firstChangeset = makeSplice('\n', 0, 0, text, firstAttribs, this.pool);
++      await this.appendRevision(firstChangeset, authorId);
+-      await this.appendRevision(firstChangeset, effectiveAuthorId);
+     }
+     this.padSettings = Pad.normalizePadSettings(this.padSettings);
+     await hooks.aCallAll('padLoad', {pad: this});
+@@ -734,25 +665,9 @@ class Pad {
+ 
+     const oldAText = this.atext;
+ 
+-    // The author to attribute inserts to when the historical op lacks
+-    // one (legacy server-internal flows / .etherpad imports). Caller-
+-    // supplied authorId wins; otherwise the stable system author.
+-    // appendRevision now requires every insert to carry an author, so
+-    // unattributed ops in the source pad would otherwise throw here.
+-    const replayAuthorId = authorId || Pad.SYSTEM_AUTHOR_ID;
+-
+     // based on Changeset.makeSplice
+     const assem = new SmartOpAssembler();
++    for (const op of opsFromAText(oldAText)) assem.append(op);
+-    for (const op of opsFromAText(oldAText)) {
+-      if (op.opcode === '+') {
+-        const map = AttributeMap.fromString(op.attribs, dstPad.pool);
+-        if (!map.get('author')) {
+-          map.set('author', replayAuthorId);
+-          op.attribs = map.toString();
+-        }
+-      }
+-      assem.append(op);
+-    }
+     assem.endDocument();
+ 
+     // although we have instantiated the dstPad with '\n', an additional '\n' is
+@@ -952,12 +867,6 @@ class Pad {
+         assert(changeset != null);
+         assert.equal(typeof changeset, 'string');
+         checkRep(changeset);
+-        // NOTE: pad.check() intentionally does not invoke
+-        // _assertInsertOpsCarryAuthor — it runs against historical
+-        // stored data (including legacy .etherpad files) where some
+-        // server-internal flows did not previously substitute the
+-        // system author. The write-time guard in appendRevision is
+-        // where the invariant is enforced for new content.
+         const unpacked = unpack(changeset);
+         let text = atext.text;
+         for (const op of deserializeOps(unpacked.ops)) {
+diff --git a/src/node/handler/APIHandler.ts b/src/node/handler/APIHandler.ts
+index f8abf9c34ec..a3cccd05813 100644
++++ b/src/node/handler/APIHandler.ts
+--- a/src/node/handler/APIHandler.ts
+@@ -20,6 +20,7 @@
+  */
+ 
+ import {MapArrayType} from "../types/MapType";
++import { jwtDecode } from "jwt-decode";
+ const api = require('../db/API');
+ const padManager = require('../db/PadManager');
+ import settings from '../utils/Settings';
+@@ -28,7 +29,6 @@ import {Http2ServerRequest} from "node:http2";
+ import {publicKeyExported} from "../security/OAuth2Provider";
+ import {jwtVerify} from "jose";
+ import {APIFields, apikey} from './APIKeyHandler'
+-import crypto from 'node:crypto';
+ // a list of all functions
+ const version:MapArrayType<any> = {};
+ 
+@@ -179,41 +179,27 @@ exports.handle = async function (apiVersion: string, functionName: string, field
+ 
+   if (apikey !== null && apikey.trim().length > 0) {
+     fields.apikey = fields.apikey || fields.api_key || fields.authorization;
++    // API key is configured, check if it is valid
++    if (fields.apikey !== apikey!.trim()) {
+-    // Constant-time compare — see crypto.timingSafeEqual docs.
+-    const provided = Buffer.from(String(fields.apikey ?? ''), 'utf8');
+-    const want = Buffer.from(apikey!.trim(), 'utf8');
+-    const ok = provided.length === want.length &&
+-        crypto.timingSafeEqual(provided, want);
+-    if (!ok) {
+       throw new createHTTPError.Unauthorized('no or wrong API Key');
+     }
+   } else {
++    if(!req.headers.authorization) {
+-    if (!req.headers.authorization) {
+       throw new createHTTPError.Unauthorized('no or wrong API Key');
+     }
+     try {
++      const clientIds: string[] = settings.sso.clients?.map((client: {client_id: string}) => client.client_id) ?? [];
++      const jwtToCheck = req.headers.authorization.replace("Bearer ", "")
++      const payload = jwtDecode(jwtToCheck)
++      // client_credentials
++      if (clientIds.includes(<string>payload.sub)) {
++        await jwtVerify(jwtToCheck, publicKeyExported!, {algorithms: ['RS256']})
++      } else {
++        // authorization_code
++        await jwtVerify(jwtToCheck, publicKeyExported!, {algorithms: ['RS256'],
++          requiredClaims: ["admin"]})
+-      const clientIds: string[] = settings.sso.clients?.map(
+-          (client: {client_id: string}) => client.client_id) ?? [];
+-      const jwtToCheck = req.headers.authorization.replace('Bearer ', '');
+-      // Verify the JWT signature first, then read claims off the verified
+-      // payload only.
+-      const {payload: verified} = await jwtVerify(
+-          jwtToCheck, publicKeyExported!, {algorithms: ['RS256']});
+-      const isClientCredentials =
+-          clientIds.includes(verified.sub as string);
+-      if (!isClientCredentials) {
+-        // authorization_code branch: require the admin claim to be
+-        // strictly true. Checking only that the claim is present is not
+-        // sufficient — the provider issues it as `admin: is_admin`, so
+-        // non-admin users would have it set to false.
+-        if (verified.admin !== true) {
+-          throw new createHTTPError.Unauthorized(
+-              'admin claim missing or not true');
+-        }
+       }
+     } catch (e) {
+-      // Single error string regardless of the underlying failure so we
+-      // don't leak which check rejected the token.
+       throw new createHTTPError.Unauthorized('no or wrong OAuth token');
+     }
+   }
+diff --git a/src/node/handler/ExportHandler.ts b/src/node/handler/ExportHandler.ts
+index 3d12dfd61d3..4ed2878eb03 100644
++++ b/src/node/handler/ExportHandler.ts
+--- a/src/node/handler/ExportHandler.ts
+@@ -23,7 +23,6 @@
+ const exporthtml = require('../utils/ExportHtml');
+ const exporttxt = require('../utils/ExportTxt');
+ const exportEtherpad = require('../utils/ExportEtherpad');
+-import crypto from 'node:crypto';
+ import fs from 'fs';
+ import settings from '../utils/Settings';
+ import os from 'os';
+@@ -156,9 +155,8 @@ exports.doExport = async (req: any, res: any, padId: string, readOnlyId: string,
+       }
+     }
+ 
++    // soffice path — write the html export to a file
++    const randNum = Math.floor(Math.random() * 0xFFFFFFFF);
+-    // soffice path — write the html export to a file. Use CSPRNG output
+-    // for the temp path token (see matching note in ImportHandler.ts).
+-    const randNum = crypto.randomBytes(16).toString('hex');
+     const srcFile = `${tempDirectory}/etherpad_export_${randNum}.html`;
+     await fsp_writeFile(srcFile, html);
+ 
+diff --git a/src/node/handler/ImportHandler.ts b/src/node/handler/ImportHandler.ts
+index 3f3a3ccb5f3..d79bb7a67ab 100644
++++ b/src/node/handler/ImportHandler.ts
+--- a/src/node/handler/ImportHandler.ts
+@@ -23,7 +23,6 @@
+ 
+ const padManager = require('../db/PadManager');
+ const padMessageHandler = require('./PadMessageHandler');
+-import crypto from 'node:crypto';
+ import {promises as fs} from 'fs';
+ import path from 'path';
+ import settings from '../utils/Settings';
+@@ -84,10 +83,7 @@ const doImport = async (req:any, res:any, padId:string, authorId:string) => {
+   // pipe to a file
+   // convert file to html via soffice
+   // set html in the pad
++  const randNum = Math.floor(Math.random() * 0xFFFFFFFF);
+-  //
+-  // Use CSPRNG output for the temp path token so the destination path
+-  // can't be predicted by another process on the same host.
+-  const randNum = crypto.randomBytes(16).toString('hex');
+ 
+   // setting flag for whether to use converter or not
+   let useConverter = (converter != null);
+diff --git a/src/node/hooks/express/admin.ts b/src/node/hooks/express/admin.ts
+index fb6cbe69ce5..7e9e6316b29 100644
++++ b/src/node/hooks/express/admin.ts
+--- a/src/node/hooks/express/admin.ts
+@@ -5,7 +5,6 @@ import fs from "fs";
+ import {MapArrayType} from "../../types/MapType";
+ 
+ import settings from 'ep_etherpad-lite/node/utils/Settings';
+-import {sanitizeProxyPath} from '../../utils/sanitizeProxyPath';
+ 
+ const ADMIN_PATH = path.join(settings.root, 'src', 'templates');
+ const PROXY_HEADER = "x-proxy-path"
+@@ -73,19 +72,11 @@ exports.expressCreateServer = (hookName: string, args: ArgsExpressType, cb: Func
+           // if the file is found, set Content-type and send data
+           res.setHeader('Content-type', map[ext] || 'text/plain');
+           if (ext === ".html" || ext === ".js" || ext === ".css") {
++            if (req.header(PROXY_HEADER)) {
+-            // The proxy-path header is woven into the response body, so
+-            // it must be sanitised before substitution and downstream
+-            // caches must not collapse responses across different
+-            // header values.
+-            const proxyPath = sanitizeProxyPath(req);
+-            if (proxyPath) {
+               let string = data.toString()
++              dataToSend = string.replaceAll("/admin", req.header(PROXY_HEADER) + "/admin")
++              dataToSend = dataToSend.replaceAll("/socket.io", req.header(PROXY_HEADER) + "/socket.io")
+-              dataToSend = string.replaceAll("/admin", proxyPath + "/admin")
+-              dataToSend = dataToSend.replaceAll(
+-                  "/socket.io", proxyPath + "/socket.io")
+             }
+-            res.setHeader('Vary', 'x-proxy-path');
+-            res.setHeader('Cache-Control', 'private, no-store');
+           }
+           res.end(dataToSend);
+         }
+diff --git a/src/node/hooks/express/specialpages.ts b/src/node/hooks/express/specialpages.ts
+index 5f863a624c0..5db7526e0e3 100644
++++ b/src/node/hooks/express/specialpages.ts
+--- a/src/node/hooks/express/specialpages.ts
+@@ -20,10 +20,12 @@ import prometheus from "../../prometheus";
+ 
+ let ioI: { sockets: { sockets: any[]; }; } | null = null
+ 
++// Sanitize x-proxy-path header to prevent XSS via header injection.
++// Only allow path-like characters (letters, digits, hyphens, underscores, slashes, dots).
++const sanitizeProxyPath = (req: any): string => {
++  const raw = req.header('x-proxy-path') || '';
++  return raw.replace(/[^a-zA-Z0-9\-_\/\.]/g, '');
++};
+-// Shared sanitizer for the `x-proxy-path` header. See the helper for the
+-// allowed character class and the protocol-relative / traversal rejection
+-// rules. Reused by admin.ts so both call sites share one definition.
+-import {sanitizeProxyPath} from '../../utils/sanitizeProxyPath';
+ 
+ 
+ exports.socketio = (hookName: string, {io}: any) => {
+diff --git a/src/node/hooks/express/tokenTransfer.ts b/src/node/hooks/express/tokenTransfer.ts
+index 175e328a170..24962c8bcde 100644
++++ b/src/node/hooks/express/tokenTransfer.ts
+--- a/src/node/hooks/express/tokenTransfer.ts
+@@ -7,20 +7,10 @@ import settings from '../../utils/Settings';
+ type TokenTransferRequest = {
+   token: string;
+   prefsHttp: string,
+-  // Optional because legacy records from older code paths persisted
+-  // without it. The GET handler treats absent/non-numeric createdAt as
+-  // expired (safe fallback); the type reflects that.
+   createdAt?: number;
+ }
+ 
++const tokenTransferKey = "tokenTransfer:";
+-// Keep the legacy on-the-wire key shape so any in-flight transfers
+-// created before this change are still redeemable.
+-const tokenTransferKey = (id: string) => `tokenTransfer::${id}`;
+-
+-// Transfer records have a hard TTL — the legitimate flow is "scan a QR
+-// code on another device and click within a few minutes". A stale id
+-// should not be redeemable indefinitely.
+-const TRANSFER_TTL_MS = 5 * 60 * 1000;
+ 
+ export const expressCreateServer =  (hookName:string, {app}:ArgsExpressType) => {
+   app.post('/tokenTransfer', async (req: any, res) => {
+@@ -43,7 +33,7 @@ export const expressCreateServer =  (hookName:string, {app}:ArgsExpressType) =>
+       createdAt: Date.now(),
+     };
+ 
++    await db.set(`${tokenTransferKey}:${id}`, token);
+-    await db.set(tokenTransferKey(id), token);
+     res.send({id});
+   })
+ 
+@@ -53,26 +43,11 @@ export const expressCreateServer =  (hookName:string, {app}:ArgsExpressType) =>
+       return res.status(400).send({error: 'Invalid request'});
+     }
+ 
++    const tokenData = await db.get(`${tokenTransferKey}:${id}`);
+-    const key = tokenTransferKey(id);
+-    const tokenData: TokenTransferRequest | undefined = await db.get(key);
+     if (!tokenData) {
+       return res.status(404).send({error: 'Token not found'});
+     }
+ 
+-    // Single-use: remove the record BEFORE the response is sent, so a
+-    // parallel request that wins the race observes an already-redeemed
+-    // transfer rather than a second usable copy.
+-    await db.remove(key);
+-
+-    // Enforce the TTL. Absent/non-numeric createdAt is treated as
+-    // expired so legacy records that pre-date this code path are
+-    // rejected on the safe side.
+-    const createdAt = typeof tokenData.createdAt === 'number'
+-        ? tokenData.createdAt : 0;
+-    if (Date.now() - createdAt > TRANSFER_TTL_MS) {
+-      return res.status(410).send({error: 'Token expired'});
+-    }
+-
+     const p = settings.cookie.prefix;
+     // Re-issue the author token on the new device as an HttpOnly cookie to
+     // match the /p/:pad path (ether/etherpad#6701 PR3). Without this, the
+@@ -88,9 +63,6 @@ export const expressCreateServer =  (hookName:string, {app}:ArgsExpressType) =>
+     res.cookie(`${p}prefsHttp`, tokenData.prefsHttp, {
+       path: '/', maxAge: 1000 * 60 * 60 * 24 * 365,
+     });
++    res.send(tokenData);
+-    // Body must NOT echo the author token — the HttpOnly cookie above
+-    // is the only channel. Body advertises only the non-secret prefs
+-    // the client needs to wire up locally.
+-    res.send({ok: true, prefsHttp: tokenData.prefsHttp});
+   })
+ }
+diff --git a/src/node/utils/ImportEtherpad.ts b/src/node/utils/ImportEtherpad.ts
+index 0306609320e..804baa8da4b 100644
++++ b/src/node/utils/ImportEtherpad.ts
+--- a/src/node/utils/ImportEtherpad.ts
+@@ -18,10 +18,7 @@ import {APool} from "../types/PadType";
+  * limitations under the License.
+  */
+ 
+-import AttributeMap from '../../static/js/AttributeMap';
+ import AttributePool from '../../static/js/AttributePool';
+-import {applyToAText, cloneAText, deserializeOps, makeAText, pack, unpack} from '../../static/js/Changeset';
+-import {SmartOpAssembler} from '../../static/js/SmartOpAssembler';
+ const {Pad} = require('../db/Pad');
+ const Stream = require('./Stream');
+ const authorManager = require('../db/AuthorManager');
+@@ -32,186 +29,11 @@ const supportedElems = require('../../static/js/contentcollector').supportedElem
+ 
+ const logger = log4js.getLogger('ImportEtherpad');
+ 
+-// Mirror of `Pad.SYSTEM_AUTHOR_ID`. Inlined to avoid a circular import
+-// (ImportEtherpad -> Pad -> ImportEtherpad via padManager) at module
+-// init time.
+-const SYSTEM_AUTHOR_ID = 'a.etherpad-system';
+-
+-// A `+` op is "pure newline" (and therefore exempt from the author
+-// requirement) iff every character in the op is a newline. The wire-
+-// boundary guard in Pad._assertInsertOpsCarryAuthor whitelists the
+-// same shape; mirror it here so the sanitiser doesn't touch ops the
+-// downstream guard would have accepted anyway.
+-const isPureNewlineInsert = (op: {lines: number, chars: number}) =>
+-    op.lines > 0 && op.chars === op.lines;
+-
+-// Walk a serialized ops string (changeset ops *or* an atext.attribs
+-// stream — both use the same encoding), inject the `author` attribute
+-// on any `+` content op that lacks one, and return the rebuilt ops
+-// string plus the number of ops that were rewritten.
+-//
+-// `pool` is the AttributePool that the ops reference, and is mutated
+-// in-place to register the system author when needed. The caller is
+-// responsible for persisting the (possibly mutated) pool back to the
+-// record alongside the rewritten ops string.
+-const sanitiseOpsString = (
+-    opsStr: string, pool: AttributePool): {ops: string, rewrites: number} => {
+-  const assem = new SmartOpAssembler();
+-  let rewrites = 0;
+-  let touched = false;
+-  for (const op of deserializeOps(opsStr)) {
+-    if (op.opcode === '+' && !isPureNewlineInsert(op)) {
+-      const map = AttributeMap.fromString(op.attribs, pool);
+-      if (!map.get('author')) {
+-        map.set('author', SYSTEM_AUTHOR_ID);
+-        op.attribs = map.toString();
+-        rewrites++;
+-        touched = true;
+-      }
+-    }
+-    assem.append(op);
+-  }
+-  assem.endDocument();
+-  // Even when nothing was rewritten, re-serializing through the
+-  // assembler is safe (it produces canonical form). But to keep the
+-  // diff minimal on clean inputs, return the original string when
+-  // nothing actually changed.
+-  if (!touched) return {ops: opsStr, rewrites: 0};
+-  return {ops: assem.toString(), rewrites};
+-};
+-
+-// Sanitise an entire changeset: unpack -> rewrite ops -> repack.
+-// oldLen / newLen / charBank are preserved as-is because adding
+-// author markers doesn't change op.chars or the character stream.
+-const sanitiseChangeset = (
+-    cs: string, pool: AttributePool): {cs: string, rewrites: number} => {
+-  let unpacked;
+-  try {
+-    unpacked = unpack(cs);
+-  } catch {
+-    // Not a parseable changeset — leave it alone and let the
+-    // downstream consumer surface the original error.
+-    return {cs, rewrites: 0};
+-  }
+-  const {ops, rewrites} = sanitiseOpsString(unpacked.ops, pool);
+-  if (rewrites === 0) return {cs, rewrites: 0};
+-  return {cs: pack(unpacked.oldLen, unpacked.newLen, ops, unpacked.charBank), rewrites};
+-};
+-
+-// Top-level pre-pass: walks the imported `records` dict, sanitises any
+-// `+` content op (across all revisions) that lacks an `author`
+-// attribute, and re-derives the cumulative head atext and any
+-// key-revision meta.atext / meta.pool snapshots so they stay
+-// consistent with the rewritten revs. Without re-derivation, the
+-// `Pad.check()` deep-equal that runs at the end of `setPadRaw` would
+-// see a sanitised head atext (or sanitised key-rev snapshot) whose
+-// attribute numbers don't agree with the sanitised running atext
+-// computed from the (separately-sanitised) revs.
+-//
+-// Returns the number of ops rewritten across the whole pad (0 means
+-// the import was already conforming and nothing was touched).
+-//
+-// Mutates `records` in place. The caller passes the original-padId-
+-// keyed records dict (i.e. the post-JSON.parse state, BEFORE the
+-// destination padId rewrite happens in processRecord).
+-const sanitiseImportedRecords = (
+-    records: Record<string, any>, srcPadId: string): number => {
+-  const padKey = `pad:${srcPadId}`;
+-  const padRec = records[padKey];
+-  if (!padRec || !padRec.pool) return 0;
+-
+-  // Collect rev records in numeric order. We process them
+-  // sequentially so we can re-apply each (post-sanitisation)
+-  // changeset to a running atext and refresh key-rev snapshots
+-  // along the way.
+-  const escPadId = srcPadId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+-  const revKeyRe = new RegExp(`^pad:${escPadId}:revs:(\\d+)$`);
+-  const revs: Array<{n: number, rec: any}> = [];
+-  for (const [k, v] of Object.entries(records)) {
+-    const m = k.match(revKeyRe);
+-    if (m && v) revs.push({n: Number(m[1]), rec: v});
+-  }
+-  revs.sort((a, b) => a.n - b.n);
+-  if (revs.length === 0) return 0;
+-
+-  // Start the running atext at the canonical empty pad and the
+-  // cumulative pool at whatever the imported padRec.pool was — the
+-  // latter already contains every attribute that the rev changesets
+-  // reference, so deserialising rev ops against it always resolves.
+-  // The pool grows in place when sanitiseOpsString needs to register
+-  // SYSTEM_AUTHOR_ID; that's exactly what we want the final
+-  // padRec.pool to look like.
+-  const cumulativePool = new AttributePool().fromJsonable(padRec.pool);
+-  let runningAText = makeAText('\n');
+-  let totalRewrites = 0;
+-
+-  for (const {rec} of revs) {
+-    if (typeof rec.changeset !== 'string') continue;
+-    const {cs, rewrites} = sanitiseChangeset(rec.changeset, cumulativePool);
+-    if (rewrites > 0) rec.changeset = cs;
+-    totalRewrites += rewrites;
+-
+-    // Walk the (possibly rewritten) changeset against the running
+-    // atext to keep it in lock-step. applyToAText also serves as
+-    // an in-pass sanity check — if a sanitised changeset doesn't
+-    // apply cleanly the import dies here instead of silently
+-    // corrupting state.
+-    runningAText = applyToAText(rec.changeset, runningAText, cumulativePool);
+-
+-    // If the imported rev carried a key-rev snapshot (meta.atext /
+-    // meta.pool), replace it with the post-sanitisation running
+-    // state. We *always* refresh when totalRewrites > 0 for this
+-    // pad — and we always refresh the snapshot of *this* rev when
+-    // the snapshot was present in the import (cheaper than figuring
+-    // out exactly which key-revs were affected by the rewrite).
+-    if (rec.meta && (rec.meta.pool || rec.meta.atext)) {
+-      rec.meta.pool = cumulativePool.toJsonable();
+-      rec.meta.atext = cloneAText(runningAText);
+-    }
+-  }
+-
+-  // Refresh the head atext and pad pool. Same rationale as the
+-  // key-rev refresh above.
+-  if (totalRewrites > 0) {
+-    padRec.atext = cloneAText(runningAText);
+-    padRec.pool = cumulativePool.toJsonable();
+-  }
+-  return totalRewrites;
+-};
+-
+ exports.setPadRaw = async (padId: string, r: string, authorId = '') => {
+   // ueberdb2 v6 is ESM-only; load via dynamic import so CJS consumers work.
+   const {Database} = await import('ueberdb2');
+   const records = JSON.parse(r);
+ 
+-  // Sanitiser pre-pass: legacy .etherpad files (and exports from older
+-  // server-internal flows that didn't substitute SYSTEM_AUTHOR_ID)
+-  // can contain `+` content ops without an `author` attribute. The
+-  // wire boundary and Pad.appendRevision now reject that shape, so a
+-  // post-import setText/setHTML/restoreRevision against an imported
+-  // pad would throw. Rewrite the imported records up-front to inject
+-  // the system author marker on any unattributed insert, mutating the
+-  // pad pool (and any per-key-rev snapshot pool) to register the
+-  // attribute. Discover the source pad id by scanning record keys:
+-  // pre-rewrite they still use the original padId.
+-  let srcPadId: string | null = null;
+-  for (const k of Object.keys(records)) {
+-    const parts = k.split(':');
+-    if (parts[0] === 'pad' && parts.length >= 2) {
+-      srcPadId = parts[1];
+-      break;
+-    }
+-  }
+-  if (srcPadId != null) {
+-    const rewritten = sanitiseImportedRecords(records, srcPadId);
+-    if (rewritten > 0) {
+-      logger.warn(
+-          `(pad ${padId}) import contained ${rewritten} unattributed insert ` +
+-          `op(s); rewriting them with the system author to satisfy the ` +
+-          `appendRevision invariant. Source pad id: ${srcPadId}.`);
+-    }
+-  }
+-
+   // get supported block Elements from plugins, we will use this later.
+   hooks.callAll('ccRegisterBlockElements').forEach((element:any) => {
+     supportedElems.add(element);
+diff --git a/src/node/utils/ImportHtml.ts b/src/node/utils/ImportHtml.ts
+index 1e71863a497..941aa767a27 100644
++++ b/src/node/utils/ImportHtml.ts
+--- a/src/node/utils/ImportHtml.ts
+@@ -16,17 +16,12 @@
+  */
+ 
+ import log4js from 'log4js';
+-import AttributeMap from '../../static/js/AttributeMap';
+ import {deserializeOps} from '../../static/js/Changeset';
+ const contentcollector = require('../../static/js/contentcollector');
+ import jsdom from 'jsdom';
+ import {PadType} from "../types/PadType";
+ import {Builder} from "../../static/js/Builder";
+ 
+-// Mirror of `Pad.SYSTEM_AUTHOR_ID`. Imported as a literal to avoid a
+-// circular require between Pad and ImportHtml during module init.
+-const SYSTEM_AUTHOR_ID = 'a.etherpad-system';
+-
+ const apiLogger = log4js.getLogger('ImportHtml');
+ let processor:any;
+ 
+@@ -77,15 +72,6 @@ exports.setPadHTML = async (pad: PadType, html:string, authorId = '') => {
+   // create a new changeset with a helper builder object
+   const builder = new Builder(1);
+ 
+-  // Every insert op needs an `author` attribute (the appendRevision
+-  // precondition). The contentcollector tags ops with style
+-  // attributes (bold, italic, etc.) but doesn't add an author; for
+-  // server-side imports the author is implicit in the caller, so
+-  // substitute the system author when no explicit one was supplied —
+-  // same pattern setText/spliceText already use.
+-  const effectiveAuthorId =
+-      (newText.length > 0 && !authorId) ? SYSTEM_AUTHOR_ID : authorId;
+-
+   // assemble each line into the builder
+   let textIndex = 0;
+   const newTextStart = 0;
+@@ -95,16 +81,7 @@ exports.setPadHTML = async (pad: PadType, html:string, authorId = '') => {
+     if (!(nextIndex <= newTextStart || textIndex >= newTextEnd)) {
+       const start = Math.max(newTextStart, textIndex);
+       const end = Math.min(newTextEnd, nextIndex);
++      builder.insert(newText.substring(start, end), op.attribs);
+-      // Merge via AttributeMap so the result is in canonical order
+-      // (sorted by pool index) — a raw `*N` prefix could violate
+-      // checkRep's canonical-form assertion.
+-      let mergedAttribs = op.attribs;
+-      if (effectiveAuthorId) {
+-        mergedAttribs = AttributeMap.fromString(op.attribs, pad.pool)
+-            .set('author', effectiveAuthorId)
+-            .toString();
+-      }
+-      builder.insert(newText.substring(start, end), mergedAttribs);
+     }
+     textIndex = nextIndex;
+   }
+@@ -113,10 +90,6 @@ exports.setPadHTML = async (pad: PadType, html:string, authorId = '') => {
+   const theChangeset = builder.toString();
+ 
+   apiLogger.debug(`The changeset: ${theChangeset}`);
++  await pad.setText('\n', authorId);
++  await pad.appendRevision(theChangeset, authorId);
+-  // Pass effectiveAuthorId here too so meta.author on the stored
+-  // revision matches the author attribute we merged into the op
+-  // attribs above — and so the padCreate / padUpdate hooks and
+-  // authorManager.addPad link the same author identity.
+-  await pad.setText('\n', effectiveAuthorId);
+-  await pad.appendRevision(theChangeset, effectiveAuthorId);
+ };
+diff --git a/src/node/utils/sanitizeProxyPath.ts b/src/node/utils/sanitizeProxyPath.ts
+deleted file mode 100644
+index 43506e957ab..00000000000
++++ /dev/null
+--- a/src/node/utils/sanitizeProxyPath.ts
+@@ -1,48 +0,0 @@
+-/**
+- * Sanitize the `x-proxy-path` request header.
+- *
+- * Etherpad lets operators run behind a reverse proxy that prefixes every
+- * route under a subpath (e.g. `/pad/etherpad/...`). The proxy is expected
+- * to set `x-proxy-path` so that server-rendered links and redirects know
+- * about the prefix. The header value is then woven into HTML, JS, CSS,
+- * and HTTP Location headers — so it must be treated as untrusted input
+- * even if the deployment intends to set it from a trusted proxy.
+- *
+- * Semantics:
+- *   - Returns an empty string when the header is absent or unparseable.
+- *   - Strips every character outside `[a-zA-Z0-9\-_\/\.]`.
+- *   - Collapses a leading `//+` to a single `/` so the value can never
+- *     be interpreted as a protocol-relative URL.
+- *   - Prepends `/` if the (non-empty) result doesn't already start
+- *     with one, so callers can always concatenate the value as an
+- *     absolute path prefix.
+- *   - Rejects values containing `..` segments.
+- *
+- * The output is always either the empty string or a string that starts
+- * with exactly one `/` and contains only `[A-Za-z0-9\-_./]`.
+- */
+-export const sanitizeProxyPath = (req: {header: (n: string) => string|undefined} | string | undefined): string => {
+-  const raw = typeof req === 'string'
+-      ? req
+-      : req && typeof req.header === 'function'
+-          ? (req.header('x-proxy-path') || '')
+-          : '';
+-  let cleaned = raw.replace(/[^a-zA-Z0-9\-_\/\.]/g, '');
+-  if (!cleaned) return '';
+-  // Collapse leading "//+" to a single "/" so the value can never be
+-  // interpreted as a protocol-relative URL when concatenated into an
+-  // href / Location / iframe src.
+-  cleaned = cleaned.replace(/^\/{2,}/, '/');
+-  // Ensure the value starts with exactly one "/". Several callers
+-  // concatenate this as a URL-path prefix (e.g. `${proxyPath}/p/...`
+-  // for redirects, `${proxyPath}/watch/...` for entrypoint URLs) and
+-  // assume the value is either empty or absolute. A header value like
+-  // `pad/etherpad` would otherwise become a relative redirect /
+-  // entrypoint and break the page.
+-  if (cleaned[0] !== '/') cleaned = '/' + cleaned;
+-  // Refuse "/.." / "../" segments — path-traversal shapes that some
+-  // downstream URL joiners would still honour even after the character
+-  // filter above.
+-  if (/(?:^|\/)\.\.(?:\/|$)/.test(cleaned)) return '';
+-  return cleaned;
+-};
+diff --git a/src/tests/backend-new/specs/sanitizeProxyPath.test.ts b/src/tests/backend-new/specs/sanitizeProxyPath.test.ts
+deleted file mode 100644
+index 967bd364b47..00000000000
++++ /dev/null
+--- a/src/tests/backend-new/specs/sanitizeProxyPath.test.ts
+@@ -1,124 +0,0 @@
+-/**
+- * Unit tests for the shared sanitizeProxyPath helper.
+- *
+- * The helper:
+- *   - returns "" when the header is absent;
+- *   - drops every character outside [A-Za-z0-9_./-];
+- *   - collapses a leading `//+` to a single `/` (so the value can never
+- *     be interpreted as a protocol-relative URL);
+- *   - rejects path-traversal segments.
+- */
+-import {describe, it, expect} from 'vitest';
+-import {sanitizeProxyPath} from '../../../node/utils/sanitizeProxyPath';
+-
+-const mockReq = (val: string|undefined) => ({
+-  header: (name: string) => name.toLowerCase() === 'x-proxy-path' ? val : undefined,
+-});
+-
+-describe('sanitizeProxyPath', () => {
+-  describe('absent / empty', () => {
+-    it('returns "" when the header is missing', () => {
+-      expect(sanitizeProxyPath(mockReq(undefined))).toBe('');
+-    });
+-
+-    it('returns "" when the header is empty', () => {
+-      expect(sanitizeProxyPath(mockReq(''))).toBe('');
+-    });
+-
+-    it('returns "" when the req object has no header()', () => {
+-      expect(sanitizeProxyPath(undefined)).toBe('');
+-      // @ts-expect-error — exercising the defensive branch
+-      expect(sanitizeProxyPath({})).toBe('');
+-    });
+-  });
+-
+-  describe('character class', () => {
+-    it('preserves slashes, dots, hyphens, underscores, alphanumerics', () => {
+-      expect(sanitizeProxyPath(mockReq('/pad/etherpad'))).toBe('/pad/etherpad');
+-      expect(sanitizeProxyPath(mockReq('/a-b_c.d/0-9'))).toBe('/a-b_c.d/0-9');
+-    });
+-
+-    it('strips angle brackets, quotes, scripts, and whitespace', () => {
+-      // The exact survivor string depends on which characters are in
+-      // the allow-list; what matters here is that none of the
+-      // HTML-breaking characters survive (no `<`, `>`, quote, paren,
+-      // equals, etc).
+-      const cleaned = sanitizeProxyPath(mockReq(
+-          '"><script>alert(1)</script><i a="'));
+-      expect(cleaned).not.toMatch(/[<>"'()=&]/);
+-      // Newlines, tabs, control chars — none of these belong in a URL path.
+-      expect(sanitizeProxyPath(mockReq('/a\n/b'))).toBe('/a/b');
+-    });
+-
+-    it('strips colons and backslashes (no scheme can survive)', () => {
+-      // A full URL gets stripped to its path-like residue. Specifically the
+-      // leading scheme + `://` collapses such that no `:` survives — so the
+-      // result can never be parsed by a browser as an absolute URL.
+-      const cleaned = sanitizeProxyPath(mockReq('http://evil.example'));
+-      expect(cleaned).not.toMatch(/[:\\]/);
+-      expect(sanitizeProxyPath(mockReq('http:\\\\evil.example')))
+-          .toBe('/httpevil.example');
+-    });
+-  });
+-
+-  describe('protocol-relative URL rejection', () => {
+-    it('collapses a leading // to a single /', () => {
+-      expect(sanitizeProxyPath(mockReq('//evil.example/pwn'))).toBe('/evil.example/pwn');
+-    });
+-
+-    it('collapses a leading /// or ///// to a single /', () => {
+-      expect(sanitizeProxyPath(mockReq('///x'))).toBe('/x');
+-      expect(sanitizeProxyPath(mockReq('/////x'))).toBe('/x');
+-    });
+-
+-    it('does NOT collapse mid-path double-slashes (they are harmless prefixes)', () => {
+-      // A double slash inside the path stays — only the leading run is
+-      // dangerous (it changes the URL authority).
+-      expect(sanitizeProxyPath(mockReq('/a//b'))).toBe('/a//b');
+-    });
+-  });
+-
+-  describe('path traversal rejection', () => {
+-    it('rejects values containing /../', () => {
+-      expect(sanitizeProxyPath(mockReq('/a/../b'))).toBe('');
+-    });
+-
+-    it('rejects values starting with ../', () => {
+-      expect(sanitizeProxyPath(mockReq('../b'))).toBe('');
+-    });
+-
+-    it('rejects values ending with /..', () => {
+-      expect(sanitizeProxyPath(mockReq('/a/..'))).toBe('');
+-    });
+-
+-    it('allows literal "..something" segments (only bare ".." traversal is blocked)', () => {
+-      expect(sanitizeProxyPath(mockReq('/a/..b/c'))).toBe('/a/..b/c');
+-    });
+-  });
+-
+-  describe('string input form', () => {
+-    it('also accepts a string directly (not just a req object)', () => {
+-      expect(sanitizeProxyPath('//x')).toBe('/x');
+-      expect(sanitizeProxyPath('/pad')).toBe('/pad');
+-    });
+-  });
+-
+-  describe('absolute-prefix guarantee', () => {
+-    it('prepends "/" when the input lacks a leading slash', () => {
+-      expect(sanitizeProxyPath(mockReq('pad/etherpad'))).toBe('/pad/etherpad');
+-      expect(sanitizeProxyPath('pad')).toBe('/pad');
+-      // Single alphanumeric stays a path, not a host.
+-      expect(sanitizeProxyPath('x')).toBe('/x');
+-    });
+-
+-    it('does not double-prefix a value that already starts with /', () => {
+-      expect(sanitizeProxyPath('/pad/etherpad')).toBe('/pad/etherpad');
+-    });
+-
+-    it('the // collapse runs before the prepend, so /// still becomes /', () => {
+-      // After the strip + the //+ collapse the prepend is a no-op for
+-      // values that already had a leading slash.
+-      expect(sanitizeProxyPath('//pad')).toBe('/pad');
+-    });
+-  });
+-});
+diff --git a/src/tests/backend/common.ts b/src/tests/backend/common.ts
+index 5e5cb2c1936..b5a4d3edfee 100644
++++ b/src/tests/backend/common.ts
+--- a/src/tests/backend/common.ts
+@@ -84,22 +84,6 @@ export const generateJWTTokenUser =  () => {
+   return jwt.sign(privateKeyExported!)
+ }
+ 
+-// Token whose `admin` claim is explicitly `false`. Used to pin the
+-// API's JWT validation: tokens that carry the claim with a non-true
+-// value must be rejected, not just tokens that omit it entirely.
+-export const generateJWTTokenAdminFalse = () => {
+-  const jwt = new SignJWT({
+-    sub: 'admin',
+-    jti: '123',
+-    exp: Math.floor(Date.now() / 1000) + 60 * 60,
+-    aud: 'account',
+-    iss: 'http://localhost:9001',
+-    admin: false,
+-  });
+-  jwt.setProtectedHeader({alg: 'RS256'});
+-  return jwt.sign(privateKeyExported!);
+-};
+-
+ export const init = async function () {
+   if (agentPromise != null) return await agentPromise;
+   let agentResolve;
+diff --git a/src/tests/backend/specs/api/jwtAdminClaim.ts b/src/tests/backend/specs/api/jwtAdminClaim.ts
+deleted file mode 100644
+index c6a0be85f08..00000000000
++++ /dev/null
+--- a/src/tests/backend/specs/api/jwtAdminClaim.ts
+@@ -1,83 +0,0 @@
+-'use strict';
+-
+-/**
+- * Coverage for the JWT admin-claim check on the OAuth-authenticated API.
+- *
+- * The authorization_code path must require `payload.admin === true`
+- * after signature verification. Tokens whose admin claim is missing,
+- * false, or otherwise non-true must be rejected with 401, and a
+- * tampered/unsigned token must also be rejected.
+- */
+-
+-const common = require('../../common');
+-import settings from '../../../../node/utils/Settings';
+-
+-let agent: any;
+-
+-const apiVersion = '1.3.1';
+-
+-describe(__filename, function () {
+-  before(async function () { agent = await common.init(); });
+-
+-  describe('JWT admin claim enforcement (authorization_code grant)', function () {
+-    let originalAuthMethod: string;
+-
+-    before(function () {
+-      // Force the OAuth path for these tests.
+-      originalAuthMethod = settings.authenticationMethod;
+-      settings.authenticationMethod = 'sso';
+-    });
+-
+-    after(function () {
+-      settings.authenticationMethod = originalAuthMethod;
+-    });
+-
+-    it('rejects a token with admin=false', async function () {
+-      const token = await common.generateJWTTokenAdminFalse();
+-      // listAllPads is a representative admin-only API call.
+-      const res = await agent
+-          .get(`/api/${apiVersion}/listAllPads`)
+-          .set('Authorization', `Bearer ${token}`)
+-          .expect(401);
+-      if (!/OAuth|admin/i.test(res.text || JSON.stringify(res.body))) {
+-        throw new Error(
+-            `Expected an auth-related error message, got: ` +
+-            `${res.text || JSON.stringify(res.body)}`);
+-      }
+-    });
+-
+-    it('rejects a token with no admin claim', async function () {
+-      const token = await common.generateJWTTokenUser();
+-      await agent
+-          .get(`/api/${apiVersion}/listAllPads`)
+-          .set('Authorization', `Bearer ${token}`)
+-          .expect(401);
+-    });
+-
+-    it('accepts a token with admin=true (happy path)', async function () {
+-      const token = await common.generateJWTToken();
+-      await agent
+-          .get(`/api/${apiVersion}/listAllPads`)
+-          .set('Authorization', `Bearer ${token}`)
+-          .expect(200);
+-    });
+-
+-    it('rejects an unsigned / tampered token', async function () {
+-      const fake =
+-          'eyJhbGciOiJSUzI1NiJ9.' +
+-          // base64({admin:true,sub:"admin",exp:9999999999})
+-          'eyJhZG1pbiI6dHJ1ZSwic3ViIjoiYWRtaW4iLCJleHAiOjk5OTk5OTk5OTl9.' +
+-          'AAAA';
+-      await agent
+-          .get(`/api/${apiVersion}/listAllPads`)
+-          .set('Authorization', `Bearer ${fake}`)
+-          .expect(401);
+-    });
+-
+-    it('rejects a request with no Authorization header', async function () {
+-      await agent
+-          .get(`/api/${apiVersion}/listAllPads`)
+-          .expect(401);
+-    });
+-  });
+-});
+diff --git a/src/tests/backend/specs/padInsertAuthorInvariant.ts b/src/tests/backend/specs/padInsertAuthorInvariant.ts
+deleted file mode 100644
+index ec7d6296b1c..00000000000
++++ /dev/null
+--- a/src/tests/backend/specs/padInsertAuthorInvariant.ts
+@@ -1,237 +0,0 @@
+-'use strict';
+-
+-/**
+- * Coverage for the "every insert op must carry an `author` attribute"
+- * invariant enforced in Pad.appendRevision. The same invariant exists
+- * at the socket boundary; the pad-level check covers the non-wire
+- * callers (HTTP API setHTML/setText/restoreRevision/copyPad and
+- * plugin paths that call appendRevision directly).
+- */
+-
+-import {PadType} from '../../../node/types/PadType';
+-
+-import {strict as assert} from 'assert';
+-const common = require('../common');
+-const padManager = require('../../../node/db/PadManager');
+-
+-describe(__filename, function () {
+-  let pad: PadType | null;
+-  let padId: string;
+-
+-  beforeEach(async function () {
+-    padId = common.randomString();
+-    assert(!(await padManager.doesPadExist(padId)));
+-    pad = await padManager.getPad(padId, '');
+-  });
+-
+-  afterEach(async function () {
+-    if (pad != null) await pad.remove();
+-    pad = null;
+-  });
+-
+-  describe('appendRevision rejects malformed insert ops', function () {
+-    it('rejects a `+N$chars` insert op with NO attribs at all', async function () {
+-      // Pad text is "\n" after getPad(_, ''), so oldLen=1.
+-      // Z:1>5+5$world  =  insert "world" at start, no attribs.
+-      const malicious = 'Z:1>5+5$world';
+-      await assert.rejects(
+-          (pad as any).appendRevision(malicious, 'a.test'),
+-          (err: Error) => /insert op without an author/.test(err.message));
+-    });
+-
+-    it('rejects a multi-op changeset whose first insert lacks an author', async function () {
+-      // Two inserts: the first has no attribs at all (bad), the second
+-      // would have a valid author marker if we'd added one. The whole
+-      // changeset must be rejected — partial application is exactly
+-      // the failure mode that left clients out of sync.
+-      const malicious = 'Z:1>a+5+5$worldhello';
+-      await assert.rejects(
+-          (pad as any).appendRevision(malicious, 'a.test'),
+-          (err: Error) => /insert op without an author/.test(err.message));
+-    });
+-
+-    it('accepts a well-formed insert that carries the author attribute', async function () {
+-      // Populate the pool so attrib 0 = ['author', 'a.test']. Use the
+-      // pad's own setText to drive that without hand-rolling an
+-      // AttributePool serialization.
+-      await pad!.setText('hello\n', 'a.test');
+-      assert.equal(pad!.text(), 'hello\n');
+-    });
+-
+-    it('does NOT reject `=` and `-` ops with empty attribs (legit canonical form)', async function () {
+-      // First put text in the pad with a known author.
+-      await pad!.setText('hello world\n', 'a.test');
+-      // A pure delete (no insert) at position 0 is `=0-5` — but `=0` is
+-      // not emitted by the canonical assembler, so use a keep+delete:
+-      // delete the first 5 chars ("hello"). authorId on appendRevision
+-      // need not match the deletion: '-' ops don't need an author
+-      // marker. The handler should accept this.
+-      const after = pad!.text(); // sanity
+-      assert.equal(after, 'hello world\n');
+-      // Delete chars 0..5 ("hello ") -> "world\n"
+-      await (pad as any).spliceText(0, 6, '', 'a.test');
+-      assert.equal(pad!.text(), 'world\n');
+-    });
+-  });
+-
+-  describe('setPadRaw (.etherpad import) sanitises unattributed inserts', function () {
+-    // Hand-craft a minimal .etherpad-shaped payload whose stored
+-    // changeset has a `+content` op WITHOUT an `author` attribute —
+-    // the same shape that the wire / appendRevision guard rejects.
+-    // The import should NOT throw: the sanitiser rewrites the op to
+-    // reference SYSTEM_AUTHOR_ID, refreshes the cumulative atext +
+-    // pool, and re-derives any key-rev snapshots so pad.check still
+-    // deep-equals.
+-    it('imports a legacy payload, persists it, and the head atext carries an author marker',
+-        async function () {
+-          const importEtherpad = require('../../../node/utils/ImportEtherpad');
+-          const db = require('../../../node/db/DB');
+-
+-          // Source pad id used inside the payload — pre-import shape
+-          // keys records by the *source* id; the import rewrites them
+-          // to the destination id.
+-          const srcId = 'legacySource';
+-          const records: any = {};
+-          // Rev 0: insert "hello world" without any author marker.
+-          // |0+b means: insert b (11 base-36 = 11) chars, 0 lines.
+-          records[`pad:${srcId}:revs:0`] = {
+-            changeset: 'Z:1>b+b$hello world',
+-            meta: {
+-              author: '',
+-              timestamp: 1700000000000,
+-              // Carry a key-rev snapshot so the sanitiser exercises
+-              // its re-derivation path too.
+-              pool: {numToAttrib: {}, nextNum: 0},
+-              atext: {text: 'hello world\n', attribs: '+b|1+1'},
+-            },
+-          };
+-          records[`pad:${srcId}`] = {
+-            atext: {text: 'hello world\n', attribs: '+b|1+1'},
+-            pool: {numToAttrib: {}, nextNum: 0},
+-            head: 0,
+-            chatHead: -1,
+-            publicStatus: false,
+-            savedRevisions: [],
+-          };
+-
+-          // Use a fresh destination padId — the beforeEach's `pad`
+-          // already created an empty pad we'll replace.
+-          const destId = common.randomString();
+-          await importEtherpad.setPadRaw(destId, JSON.stringify(records), 'a.importer');
+-
+-          // Read the stored head atext back. It must contain a `*N`
+-          // attribute reference for the sanitiser to have done its
+-          // job (the original was just `+b|1+1` with no `*` at all).
+-          const stored = await db.get(`pad:${destId}`);
+-          if (!stored) throw new Error(`destination pad ${destId} was not persisted`);
+-          const headAttribs: string = stored.atext.attribs;
+-          if (!/\*/.test(headAttribs)) {
+-            throw new Error(
+-                `expected sanitised head atext.attribs to contain a *N ref ` +
+-                `(author marker), got: ${headAttribs}`);
+-          }
+-          // The pool must now register SYSTEM_AUTHOR_ID under some
+-          // index — that's the attribute the rewritten ops point at.
+-          const pool = stored.pool || {};
+-          const numToAttrib = pool.numToAttrib || {};
+-          const sawSystemAuthor = Object.values(numToAttrib).some(
+-              (a: any) => Array.isArray(a) &&
+-                          a[0] === 'author' &&
+-                          a[1] === 'a.etherpad-system');
+-          if (!sawSystemAuthor) {
+-            throw new Error(
+-                `expected SYSTEM_AUTHOR_ID in the persisted pool, got: ` +
+-                JSON.stringify(numToAttrib));
+-          }
+-
+-          // Cleanup so afterEach doesn't double-remove.
+-          const padMgr = require('../../../node/db/PadManager');
+-          if (await padMgr.doesPadExist(destId)) {
+-            const destPad = await padMgr.getPad(destId);
+-            await destPad.remove();
+-          }
+-        });
+-
+-    it('leaves an already-conforming payload untouched (no log noise on good imports)',
+-        async function () {
+-          const importEtherpad = require('../../../node/utils/ImportEtherpad');
+-          const db = require('../../../node/db/DB');
+-
+-          // Build a well-formed payload by going through the normal
+-          // setText path on a temporary source pad, then export-shape it.
+-          const srcId = common.randomString();
+-          const src = await padManager.getPad(srcId, '');
+-          await src.setText('hello world\n', 'a.test');
+-          // Read it back into the records shape directly.
+-          const padRec = await db.get(`pad:${srcId}`);
+-          const rev0 = await db.get(`pad:${srcId}:revs:0`);
+-          const rev1 = await db.get(`pad:${srcId}:revs:1`);
+-          const records: any = {};
+-          records[`pad:${srcId}`] = padRec;
+-          if (rev0) records[`pad:${srcId}:revs:0`] = rev0;
+-          if (rev1) records[`pad:${srcId}:revs:1`] = rev1;
+-          await src.remove();
+-
+-          const destId = common.randomString();
+-          await importEtherpad.setPadRaw(destId, JSON.stringify(records), 'a.importer');
+-
+-          // The destination should look like the source did. Most
+-          // importantly, no throws — which the lack of an exception
+-          // above already confirms.
+-          const stored = await db.get(`pad:${destId}`);
+-          if (!stored || !stored.atext) {
+-            throw new Error('destination pad was not persisted');
+-          }
+-
+-          const padMgr = require('../../../node/db/PadManager');
+-          if (await padMgr.doesPadExist(destId)) {
+-            const destPad = await padMgr.getPad(destId);
+-            await destPad.remove();
+-          }
+-        });
+-  });
+-
+-  describe('legacy replay paths cope with unattributed historical ops', function () {
+-    // Simulates a stored atext written before the SYSTEM_AUTHOR_ID
+-    // substitution was the server-side default. restoreRevision and
+-    // copyPadWithoutHistory both reconstruct a changeset from a
+-    // source atext; if any run lacks an `author` attribute, the new
+-    // appendRevision guard would otherwise throw and the API would
+-    // return a 5xx for legacy pads.
+-
+-    // Force the in-memory pad into a legacy shape: atext.attribs with
+-    // a bare `+N` insert (no `*K` markers), pool emptied. Bypass
+-    // spliceText/setText, which would substitute SYSTEM_AUTHOR_ID.
+-    const installLegacyAText = async (p: any, text: string) => {
+-      const AttributePool = require('../../../static/js/AttributePool').default;
+-      p.pool = new AttributePool();
+-      p.atext = {
+-        text: text + '\n',
+-        attribs: `+${text.length.toString(36)}|1+1`,
+-      };
+-      await p.saveToDatabase();
+-    };
+-
+-    // NOTE: restoreRevision reads the source atext from the historical
+-    // revs:N record on disk (not from the in-memory pad.atext), so a
+-    // pure in-memory poison helper can't exercise its replay path
+-    // end-to-end. Direct DB manipulation of a stored rev record would
+-    // close that gap; the copyPadWithoutHistory case below already
+-    // exercises the same AttributeMap merge logic that the
+-    // restoreRevision fix uses, so the symmetric code-path is covered.
+-    it.skip('TODO: restoreRevision merges in an author when the historical rev lacks one',
+-        async function () { /* placeholder */ });
+-
+-    it('copyPadWithoutHistory merges in an author when the source atext lacks one',
+-        async function () {
+-          const api = require('../../../node/db/API');
+-          const destId = common.randomString();
+-          await installLegacyAText(pad, 'legacy source');
+-          // Should not throw on the destination's appendRevision.
+-          await api.copyPadWithoutHistory(padId, destId, true, 'a.copier');
+-          // Cleanup the destination so afterEach doesn't double-remove.
+-          const destPad = await padManager.getPad(destId);
+-          await destPad.remove();
+-        });
+-  });
+-});
+diff --git a/src/tests/backend/specs/proxyPathRedirect.ts b/src/tests/backend/specs/proxyPathRedirect.ts
+deleted file mode 100644
+index bfab9a66bbf..00000000000
++++ /dev/null
+--- a/src/tests/backend/specs/proxyPathRedirect.ts
+@@ -1,100 +0,0 @@
+-'use strict';
+-
+-/**
+- * Coverage for the `/p/:pad/timeslider` redirect when the request
+- * carries a hostile `x-proxy-path` header. The Location header must
+- * always be a same-origin path — never protocol-relative, never an
+- * absolute URL — regardless of what value the proxy header supplied.
+- */
+-
+-const common = require('../common');
+-
+-let agent: any;
+-
+-describe(__filename, function () {
+-  before(async function () { agent = await common.init(); });
+-
+-  describe('GET /p/:pad/timeslider with hostile x-proxy-path', function () {
+-    const padId = 'TimesliderRedirectTest';
+-
+-    it('rejects a protocol-relative proxy-path (//evil.example)', async function () {
+-      const res = await agent.get(`/p/${padId}/timeslider`)
+-          .set('x-proxy-path', '//evil.example')
+-          .expect(302);
+-      const loc: string = res.headers.location;
+-      if (typeof loc !== 'string') {
+-        throw new Error(`expected a Location header, got ${JSON.stringify(res.headers)}`);
+-      }
+-      // The actual security property: the redirect must NOT be parseable
+-      // as cross-origin. Two shapes of cross-origin would be bad:
+-      //   - protocol-relative (`//host/...`), which browsers honor as
+-      //     `<current scheme>://host/...`
+-      //   - absolute (`https://host/...`)
+-      // The sanitiser collapses `//+` -> `/` and strips `:`, so the result
+-      // is always a same-origin path. The attacker's "host" surviving as
+-      // a path SEGMENT (e.g. `/evil.example/p/x`) is harmless — the
+-      // browser stays on the etherpad origin and gets a 404.
+-      if (loc.startsWith('//')) {
+-        throw new Error(
+-            `regression: redirect is protocol-relative — Location: ${loc}`);
+-      }
+-      if (/^[a-z][a-z0-9+.-]*:/i.test(loc)) {
+-        throw new Error(
+-            `regression: redirect has a scheme (cross-origin) — Location: ${loc}`);
+-      }
+-      // The path component must still include the pad id (the legitimate
+-      // payload of the redirect).
+-      if (!loc.includes(`/p/${padId}`)) {
+-        throw new Error(
+-            `unexpected redirect target: ${loc} (wanted to include /p/${padId})`);
+-      }
+-    });
+-
+-    it('rejects ///evil with more leading slashes', async function () {
+-      const res = await agent.get(`/p/${padId}/timeslider`)
+-          .set('x-proxy-path', '///evil.example/x')
+-          .expect(302);
+-      const loc: string = res.headers.location;
+-      if (loc.startsWith('//')) {
+-        throw new Error(
+-            `regression: redirect is protocol-relative — Location: ${loc}`);
+-      }
+-    });
+-
+-    it('honours a well-formed proxy-path (/pad/etherpad)', async function () {
+-      const res = await agent.get(`/p/${padId}/timeslider`)
+-          .set('x-proxy-path', '/pad/etherpad')
+-          .expect(302);
+-      const loc: string = res.headers.location;
+-      // Must start with a single slash and contain the legitimate prefix.
+-      if (!loc.startsWith('/pad/etherpad/p/')) {
+-        throw new Error(`unexpected redirect target: ${loc}`);
+-      }
+-    });
+-
+-    it('handles a request with no proxy-path header', async function () {
+-      const res = await agent.get(`/p/${padId}/timeslider`)
+-          .expect(302);
+-      const loc: string = res.headers.location;
+-      if (loc.startsWith('//') || !/\/p\//.test(loc)) {
+-        throw new Error(`unexpected redirect target: ${loc}`);
+-      }
+-    });
+-
+-    it('strips HTML-bearing payloads from proxy-path before reflecting them',
+-        async function () {
+-          // Belt-and-braces — the same sanitiser is used in admin.ts.
+-          // For the redirect we only need to confirm the Location header is
+-          // safe (single leading slash, no angle brackets, no quotes).
+-          const res = await agent.get(`/p/${padId}/timeslider`)
+-              .set('x-proxy-path', '"><script>alert(1)</script>')
+-              .expect(302);
+-          const loc: string = res.headers.location;
+-          if (/[<>"']/.test(loc)) {
+-            throw new Error(
+-                `regression: Location header contains HTML-breaking ` +
+-                `characters: ${loc}`);
+-          }
+-        });
+-  });
+-});
+diff --git a/src/tests/backend/specs/tokenTransfer.ts b/src/tests/backend/specs/tokenTransfer.ts
+deleted file mode 100644
+index a7f0c4358fc..00000000000
++++ /dev/null
+--- a/src/tests/backend/specs/tokenTransfer.ts
+@@ -1,153 +0,0 @@
+-'use strict';
+-
+-/**
+- * Coverage for /tokenTransfer/:token: TTL, single-use, and the
+- * response-body shape (cookie-only — no `token` field in JSON).
+- */
+-
+-const common = require('../common');
+-import settings from '../../../node/utils/Settings';
+-
+-const db = require('../../../node/db/DB');
+-
+-let agent: any;
+-
+-// Match the value in src/node/hooks/express/tokenTransfer.ts. Kept here as a
+-// constant rather than importing so the test will fail loudly if the
+-// production constant is ever changed (a "5 minute" expectation downstream
+-// might depend on it).
+-const TRANSFER_TTL_MS = 5 * 60 * 1000;
+-
+-describe(__filename, function () {
+-  before(async function () { agent = await common.init(); });
+-
+-  // Each test plants a fresh author cookie because POST /tokenTransfer reads
+-  // the token off the request's own cookie jar. Using a literal value (not a
+-  // real Etherpad-minted token) is fine for this test surface — the handler
+-  // does not validate the token's shape.
+-  const cookiePrefix = (): string => settings.cookie.prefix || '';
+-  const authorCookie = (val: string) => `${cookiePrefix()}token=${val}`;
+-
+-  const postTransfer = async (
+-      tokenValue: string, body: object = {}): Promise<string> => {
+-    const res = await agent.post('/tokenTransfer')
+-        .set('Cookie', authorCookie(tokenValue))
+-        .send(body)
+-        .expect(200);
+-    if (typeof res.body.id !== 'string' || !res.body.id) {
+-      throw new Error(
+-          `expected {id: string} from POST /tokenTransfer, got ${
+-            JSON.stringify(res.body)}`);
+-    }
+-    return res.body.id;
+-  };
+-
+-  describe('happy path', function () {
+-    it('POST returns an id and GET sets the HttpOnly cookie', async function () {
+-      const id = await postTransfer('t.abc123', {prefsHttp: 'theme=dark'});
+-      const res = await agent.get(`/tokenTransfer/${id}`).expect(200);
+-
+-      // The response body must not contain the raw `token` field —
+-      // the HttpOnly cookie set below is the only delivery channel.
+-      if ('token' in res.body) {
+-        throw new Error(
+-            `response body leaks the author token: ${JSON.stringify(res.body)}`);
+-      }
+-      if (res.body.ok !== true) {
+-        throw new Error(
+-            `expected {ok:true,...} body, got ${JSON.stringify(res.body)}`);
+-      }
+-      if (res.body.prefsHttp !== 'theme=dark') {
+-        throw new Error(
+-            `expected prefsHttp to round-trip, got ${JSON.stringify(res.body)}`);
+-      }
+-
+-      // The HttpOnly author cookie should be set on the response.
+-      const setCookie = (res.headers['set-cookie'] || []) as string[];
+-      const tokenCookie = setCookie.find(
+-          (c) => c.startsWith(`${cookiePrefix()}token=`));
+-      if (!tokenCookie) {
+-        throw new Error(
+-            `expected Set-Cookie for ${cookiePrefix()}token, got ${
+-              JSON.stringify(setCookie)}`);
+-      }
+-      if (!/HttpOnly/i.test(tokenCookie)) {
+-        throw new Error(
+-            `expected HttpOnly on author cookie, got ${tokenCookie}`);
+-      }
+-      // The HttpOnly cookie should carry the original token value (URL-encoded
+-      // by supertest; do a substring check to keep the assertion stable).
+-      if (!tokenCookie.includes('t.abc123')) {
+-        throw new Error(
+-            `expected author cookie to carry the original token, got ${
+-              tokenCookie}`);
+-      }
+-    });
+-  });
+-
+-  describe('single-use enforcement', function () {
+-    it('a second GET with the same id returns 404', async function () {
+-      const id = await postTransfer('t.single-use');
+-      await agent.get(`/tokenTransfer/${id}`).expect(200);
+-      // Second redemption: the record must be gone.
+-      await agent.get(`/tokenTransfer/${id}`).expect(404);
+-    });
+-  });
+-
+-  describe('TTL enforcement', function () {
+-    it('a GET more than TRANSFER_TTL_MS after POST returns 410', async function () {
+-      const id = await postTransfer('t.expired');
+-      // Backdate the stored record by mutating it directly. Going through
+-      // setTimeout for 5+ minutes inside a unit test isn't viable, and the
+-      // production code path reads createdAt off the DB record — so it's
+-      // sufficient to put an expired createdAt in place.
+-      const key = `tokenTransfer::${id}`;
+-      const record = await db.get(key);
+-      if (!record) {
+-        throw new Error(
+-            `expected a DB record at ${key}; got ${JSON.stringify(record)}`);
+-      }
+-      record.createdAt = Date.now() - (TRANSFER_TTL_MS + 1000);
+-      await db.set(key, record);
+-
+-      const res = await agent.get(`/tokenTransfer/${id}`).expect(410);
+-      if (!/expired/i.test(res.body.error || '')) {
+-        throw new Error(
+-            `expected an expiry error, got ${JSON.stringify(res.body)}`);
+-      }
+-      // After an expired GET the record should also be gone (the new code
+-      // removes the row before checking the TTL so an expired id cannot
+-      // be tried again).
+-      const after = await db.get(key);
+-      if (after != null) {
+-        throw new Error(
+-            `expected the DB record to be removed after an expired GET; ` +
+-            `still present: ${JSON.stringify(after)}`);
+-      }
+-    });
+-
+-    it('a record with no createdAt is treated as expired', async function () {
+-      // Simulate a legacy record that pre-dates this code path (the original
+-      // handler made createdAt optional and inserted it inconsistently).
+-      const id = 'legacy-record-' + Date.now();
+-      const key = `tokenTransfer::${id}`;
+-      await db.set(key, {token: 't.legacy', prefsHttp: ''});
+-      await agent.get(`/tokenTransfer/${id}`).expect(410);
+-    });
+-  });
+-
+-  describe('POST validation', function () {
+-    it('returns 400 when no author cookie is present', async function () {
+-      await agent.post('/tokenTransfer')
+-          .send({})
+-          .expect(400);
+-    });
+-  });
+-
+-  describe('GET validation', function () {
+-    it('returns 404 for an unknown id', async function () {
+-      await agent.get(`/tokenTransfer/${'does-not-exist-' + Date.now()}`)
+-          .expect(404);
+-    });
+-  });
+-});

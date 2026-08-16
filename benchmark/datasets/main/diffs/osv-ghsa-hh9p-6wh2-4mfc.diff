@@ -1,0 +1,247 @@
+diff --git a/git/cmd.py b/git/cmd.py
+index 03ecd13f5..6e3d07c98 100644
++++ b/git/cmd.py
+--- a/git/cmd.py
+@@ -654,12 +654,6 @@ class Git(metaclass=_GitMeta):
+         "--upload-pack",
+     ]
+ 
+-    unsafe_git_pathspec_from_file_options = [
+-        # Reads pathspecs from a caller-controlled file. Some commands include an
+-        # unmatched pathspec in their error output, which can disclose the file.
+-        "--pathspec-from-file",
+-    ]
+-
+     def __getstate__(self) -> Dict[str, Any]:
+         return slots_to_dict(self, exclude=self._excluded_)
+ 
+diff --git a/git/index/base.py b/git/index/base.py
+index 0e7b5f918..a12ece7ec 100644
++++ b/git/index/base.py
+--- a/git/index/base.py
+@@ -1024,7 +1024,6 @@ def remove(
+         self,
+         items: Union[PathLike, Sequence[Union[PathLike, Blob, BaseIndexEntry, "Submodule"]]],
+         working_tree: bool = False,
+-        allow_unsafe_options: bool = False,
+         **kwargs: Any,
+     ) -> List[str]:
+         R"""Remove the given items from the index and optionally from the working tree
+@@ -1055,10 +1054,6 @@ def remove(
+             physically removing the respective file. This may fail if there are
+             uncommitted changes in it.
+ 
+-        :param allow_unsafe_options:
+-            Allow unsafe options such as ``--pathspec-from-file`` to be passed to
+-            :manpage:`git-rm(1)`.
+-
+         :param kwargs:
+             Additional keyword arguments to be passed to :manpage:`git-rm(1)`, such as
+             ``r`` to allow recursive removal.
+@@ -1070,11 +1065,6 @@ def remove(
+             This is interesting to know in case you have provided a directory or globs.
+             Paths are relative to the repository.
+         """
+-        if not allow_unsafe_options:
+-            Git.check_unsafe_options(
+-                options=Git._option_candidates([], kwargs),
+-                unsafe_options=Git.unsafe_git_pathspec_from_file_options,
+-            )
+         args = []
+         if not working_tree:
+             args.append("--cached")
+diff --git a/git/refs/head.py b/git/refs/head.py
+index 7f563374e..3c43993e7 100644
++++ b/git/refs/head.py
+--- a/git/refs/head.py
+@@ -19,7 +19,6 @@
+ 
+ from typing import Any, Sequence, TYPE_CHECKING, Union
+ 
+-from git.cmd import Git
+ from git.types import Commit_ish, PathLike
+ 
+ if TYPE_CHECKING:
+@@ -63,7 +62,6 @@ def reset(
+         index: bool = True,
+         working_tree: bool = False,
+         paths: Union[PathLike, Sequence[PathLike], None] = None,
+-        allow_unsafe_options: bool = False,
+         **kwargs: Any,
+     ) -> "HEAD":
+         """Reset our HEAD to the given commit optionally synchronizing the index and
+@@ -86,21 +84,12 @@ def reset(
+             Single path or list of paths relative to the git root directory
+             that are to be reset. This allows to partially reset individual files.
+ 
+-        :param allow_unsafe_options:
+-            Allow unsafe options such as ``--pathspec-from-file`` to be passed to
+-            :manpage:`git-reset(1)`.
+-
+         :param kwargs:
+             Additional arguments passed to :manpage:`git-reset(1)`.
+ 
+         :return:
+             self
+         """
+-        if not allow_unsafe_options:
+-            Git.check_unsafe_options(
+-                options=Git._option_candidates([commit], kwargs),
+-                unsafe_options=Git.unsafe_git_pathspec_from_file_options,
+-            )
+         mode: Union[str, None]
+         mode = "--soft"
+         if index:
+@@ -245,12 +234,7 @@ def rename(self, new_path: PathLike, force: bool = False) -> "Head":
+         self.path = "%s/%s" % (self._common_path_default, new_path)
+         return self
+ 
++    def checkout(self, force: bool = False, **kwargs: Any) -> Union["HEAD", "Head"]:
+-    def checkout(
+-        self,
+-        force: bool = False,
+-        allow_unsafe_options: bool = False,
+-        **kwargs: Any,
+-    ) -> Union["HEAD", "Head"]:
+         """Check out this head by setting the HEAD to this reference, by updating the
+         index to reflect the tree we point to and by updating the working tree to
+         reflect the latest index.
+@@ -262,10 +246,6 @@ def checkout(self, force: bool = False, **kwargs: Any) -> Union["HEAD", "Head"]:
+             If ``False``, :exc:`~git.exc.GitCommandError` will be raised in that
+             situation.
+ 
+-        :param allow_unsafe_options:
+-            Allow unsafe options such as ``--pathspec-from-file`` to be passed to
+-            :manpage:`git-checkout(1)`.
+-
+         :param kwargs:
+             Additional keyword arguments to be passed to git checkout, e.g.
+             ``b="new_branch"`` to create a new branch at the given spot.
+@@ -281,11 +261,6 @@ def checkout(self, force: bool = False, **kwargs: Any) -> Union["HEAD", "Head"]:
+             the HEAD detached which is allowed and possible, but remains a special state
+             that some tools might not be able to handle.
+         """
+-        if not allow_unsafe_options:
+-            Git.check_unsafe_options(
+-                options=Git._option_candidates([], kwargs),
+-                unsafe_options=Git.unsafe_git_pathspec_from_file_options,
+-            )
+         kwargs["f"] = force
+         if kwargs["f"] is False:
+             kwargs.pop("f")
+diff --git a/test/test_git.py b/test/test_git.py
+index a88d980fb..d3c43b247 100644
++++ b/test/test_git.py
+--- a/test/test_git.py
+@@ -215,18 +215,6 @@ def test_option_candidates_ignore_untransformed_kwargs(self):
+ 
+         self.assertEqual(options, ["--max-count"])
+ 
+-    def test_option_candidates_include_falsey_non_boolean_values(self):
+-        kwargs = {"pathspec_from_file": 0}
+-        candidates = Git._option_candidates(kwargs=kwargs)
+-
+-        self.assertEqual(candidates, ["--pathspec-from-file"])
+-        self.assertEqual(self.git.transform_kwargs(**kwargs), ["--pathspec-from-file=0"])
+-        with self.assertRaises(UnsafeOptionError):
+-            Git.check_unsafe_options(
+-                options=candidates,
+-                unsafe_options=Git.unsafe_git_pathspec_from_file_options,
+-            )
+-
+     def test_option_candidates_include_split_single_char_option_values(self):
+         cases = [
+             ({"n": "--upload-pack=helper"}, ["-n", "--upload-pack=helper"], ["--upload-pack"]),
+diff --git a/test/test_index.py b/test/test_index.py
+index a9dc8ca61..ce6274ed0 100644
++++ b/test/test_index.py
+--- a/test/test_index.py
+@@ -212,32 +212,6 @@ def test_checkout_rejects_unsafe_prefix(self, rw_repo):
+             rw_repo.index.checkout(prefix=f"{target}/", allow_unsafe_options=True)
+             self.assertTrue(osp.isfile(osp.join(target, "CHANGES")))
+ 
+-    @with_rw_repo("HEAD")
+-    def test_remove_rejects_pathspec_from_file(self, rw_repo):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            pathspecs = Path(tdir) / "pathspecs"
+-            pathspecs.write_bytes(b"unmatched-path-one\nunmatched-path-two")
+-            for option_name in ("pathspec_from_file", "pathspec_from"):
+-                with self.assertRaises(UnsafeOptionError):
+-                    rw_repo.index.remove(
+-                        [],
+-                        pathspec_file_nul=True,
+-                        **{option_name: str(pathspecs)},
+-                    )
+-
+-    @with_rw_repo("HEAD")
+-    def test_remove_allows_explicit_pathspec_from_file(self, rw_repo):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            pathspecs = Path(tdir) / "pathspecs"
+-            pathspecs.write_bytes(b"CHANGES\0")
+-            removed = rw_repo.index.remove(
+-                [],
+-                pathspec_from_file=str(pathspecs),
+-                pathspec_file_nul=True,
+-                allow_unsafe_options=True,
+-            )
+-            assert "CHANGES" in removed
+-
+     def __init__(self, *args):
+         super().__init__(*args)
+         self._reset_progress()
+diff --git a/test/test_refs.py b/test/test_refs.py
+index e5235be9b..38e15cfa1 100644
++++ b/test/test_refs.py
+--- a/test/test_refs.py
+@@ -262,51 +262,6 @@ def test_head_checkout_detached_head(self, rw_repo):
+         assert isinstance(res, SymbolicReference)
+         assert res.name == "HEAD"
+ 
+-    @with_rw_repo("HEAD")
+-    def test_head_checkout_rejects_pathspec_from_file(self, rw_repo):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            pathspecs = Path(tdir) / "pathspecs"
+-            pathspecs.write_bytes(b"unmatched-path-one\nunmatched-path-two")
+-            for option_name in ("pathspec_from_file", "pathspec_from"):
+-                with self.assertRaises(UnsafeOptionError):
+-                    rw_repo.active_branch.checkout(
+-                        pathspec_file_nul=True,
+-                        **{option_name: str(pathspecs)},
+-                    )
+-
+-    @with_rw_repo("HEAD")
+-    def test_head_reset_rejects_pathspec_from_file(self, rw_repo):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            pathspecs = Path(tdir) / "pathspecs"
+-            pathspecs.write_bytes(b"unmatched-path-one\nunmatched-path-two")
+-            for option_name in ("pathspec_from_file", "pathspec_from"):
+-                with self.assertRaises(UnsafeOptionError):
+-                    rw_repo.head.reset(
+-                        pathspec_file_nul=True,
+-                        **{option_name: str(pathspecs)},
+-                    )
+-            for option_name in ("--pathspec-from-file", "--pathspec-from"):
+-                with self.assertRaises(UnsafeOptionError):
+-                    rw_repo.head.reset(
+-                        f"{option_name}={pathspecs}",
+-                        pathspec_file_nul=True,
+-                    )
+-
+-    @with_rw_repo("HEAD")
+-    def test_head_commands_allow_explicit_pathspec_from_file(self, rw_repo):
+-        with tempfile.TemporaryDirectory() as tdir:
+-            pathspecs = Path(tdir) / "pathspecs"
+-            pathspecs.write_bytes(b"CHANGES\0")
+-            options = {
+-                "pathspec_from_file": str(pathspecs),
+-                "pathspec_file_nul": True,
+-                "allow_unsafe_options": True,
+-            }
+-            head = rw_repo.head
+-            branch = rw_repo.active_branch
+-            assert head.reset(**options) is head
+-            assert branch.checkout(**options) == branch
+-
+     @with_rw_repo("0.1.6")
+     def test_head_reset(self, rw_repo):
+         cur_head = rw_repo.head

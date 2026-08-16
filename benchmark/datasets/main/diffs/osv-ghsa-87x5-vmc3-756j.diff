@@ -1,0 +1,228 @@
+diff --git a/tests/entrypoints/openai/completion/test_completion_error.py b/tests/entrypoints/openai/completion/test_completion_error.py
+index aa9e9c1d72e0..5906063c54a8 100644
++++ b/tests/entrypoints/openai/completion/test_completion_error.py
+--- a/tests/entrypoints/openai/completion/test_completion_error.py
+@@ -474,139 +474,3 @@ def test_negative_prompt_token_ids_flat():
+             prompt=[-1],
+             max_tokens=10,
+         )
+-
+-
+-class TestCompletionPromptListLimit:
+-    """Regression tests for CVE: unbounded prompt list fan-out."""
+-
+-    def test_scalar_prompt_allowed(self):
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt="hello",
+-            max_tokens=1,
+-        )
+-        assert request.prompt == "hello"
+-
+-    def test_single_token_list_allowed(self):
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt=[1, 2, 3],
+-            max_tokens=1,
+-        )
+-        assert request.prompt == [1, 2, 3]
+-
+-    def test_bounded_text_prompt_list_allowed(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "10")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt=["a", "b", "c"],
+-            max_tokens=1,
+-        )
+-        assert request.prompt == ["a", "b", "c"]
+-
+-    def test_bounded_token_id_prompt_list_allowed(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "10")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt=[[1], [2], [3]],
+-            max_tokens=1,
+-        )
+-        assert request.prompt == [[1], [2], [3]]
+-
+-    def test_oversized_text_prompt_list_rejected(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        with pytest.raises(
+-            Exception, match="prompt list length 10 exceeds the maximum"
+-        ):
+-            CompletionRequest(
+-                model=MODEL_NAME,
+-                prompt=["x"] * 10,
+-                max_tokens=1,
+-            )
+-
+-    def test_oversized_token_id_prompt_list_rejected(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        with pytest.raises(
+-            Exception, match="prompt list length 10 exceeds the maximum"
+-        ):
+-            CompletionRequest(
+-                model=MODEL_NAME,
+-                prompt=[[1]] * 10,
+-                max_tokens=1,
+-            )
+-
+-    def test_exact_limit_allowed(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt=["x"] * 5,
+-            max_tokens=1,
+-        )
+-        assert len(request.prompt) == 5
+-
+-    def test_one_over_limit_rejected(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        with pytest.raises(Exception, match="prompt list length 6 exceeds the maximum"):
+-            CompletionRequest(
+-                model=MODEL_NAME,
+-                prompt=["x"] * 6,
+-                max_tokens=1,
+-            )
+-
+-    def test_oversized_prompt_embeds_list_rejected(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        with pytest.raises(Exception, match="prompt_embeds list length 10 exceeds"):
+-            CompletionRequest(
+-                model=MODEL_NAME,
+-                prompt_embeds=[b"\x00"] * 10,
+-                max_tokens=1,
+-            )
+-
+-    def test_bounded_prompt_embeds_list_allowed(self, monkeypatch):
+-        monkeypatch.setenv("VLLM_MAX_COMPLETION_PROMPTS", "5")
+-        from vllm import envs
+-
+-        if hasattr(envs.__getattr__, "cache_clear"):
+-            envs.__getattr__.cache_clear()
+-
+-        request = CompletionRequest(
+-            model=MODEL_NAME,
+-            prompt_embeds=[b"\x00"] * 5,
+-            max_tokens=1,
+-        )
+-        assert len(request.prompt_embeds) == 5
+diff --git a/vllm/entrypoints/openai/completion/protocol.py b/vllm/entrypoints/openai/completion/protocol.py
+index f59bab218c84..23bf4dd83f38 100644
++++ b/vllm/entrypoints/openai/completion/protocol.py
+--- a/vllm/entrypoints/openai/completion/protocol.py
+@@ -9,7 +9,6 @@
+ 
+ from pydantic import Field, model_validator
+ 
+-import vllm.envs as envs
+ from vllm.config import ModelConfig
+ from vllm.config.utils import replace
+ from vllm.entrypoints.openai.engine.protocol import (
+@@ -36,7 +35,6 @@
+     ThinkingTokenBudget,
+ )
+ from vllm.utils import random_uuid
+-from vllm.utils.collection_utils import is_list_of
+ 
+ logger = init_logger(__name__)
+ 
+@@ -499,38 +497,6 @@ def validate_prompt_and_prompt_embeds(cls, data):
+ 
+         return data
+ 
+-    @model_validator(mode="before")
+-    @classmethod
+-    def validate_prompt_list_length(cls, data):
+-        max_prompts = envs.VLLM_MAX_COMPLETION_PROMPTS
+-
+-        prompt = data.get("prompt")
+-        if (
+-            isinstance(prompt, list)
+-            and len(prompt) > 0
+-            and not is_list_of(prompt, int)
+-            and len(prompt) > max_prompts
+-        ):
+-            raise VLLMValidationError(
+-                f"prompt list length {len(prompt)} exceeds the maximum "
+-                f"allowed count of {max_prompts}. To increase this "
+-                "limit, set the VLLM_MAX_COMPLETION_PROMPTS "
+-                "environment variable.",
+-                parameter="prompt",
+-            )
+-
+-        prompt_embeds = data.get("prompt_embeds")
+-        if isinstance(prompt_embeds, list) and len(prompt_embeds) > max_prompts:
+-            raise VLLMValidationError(
+-                f"prompt_embeds list length {len(prompt_embeds)} exceeds "
+-                f"the maximum allowed count of {max_prompts}. To increase "
+-                "this limit, set the VLLM_MAX_COMPLETION_PROMPTS "
+-                "environment variable.",
+-                parameter="prompt_embeds",
+-            )
+-
+-        return data
+-
+     @model_validator(mode="before")
+     @classmethod
+     def check_cache_salt_support(cls, data):
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 8f40f8cfa9a3..13a19b86c0ae 100755
++++ b/vllm/envs.py
+--- a/vllm/envs.py
+@@ -101,7 +101,6 @@
+     VLLM_ALLOW_LONG_MAX_MODEL_LEN: bool = False
+     VLLM_HTTP_TIMEOUT_KEEP_ALIVE: int = 5  # seconds
+     VLLM_MAX_N_SEQUENCES: int = 16384
+-    VLLM_MAX_COMPLETION_PROMPTS: int = 1024
+     VLLM_PLUGINS: list[str] | None = None
+     VLLM_LORA_RESOLVER_CACHE_DIR: str | None = None
+     VLLM_LORA_RESOLVER_HF_REPO_LIST: str | None = None
+@@ -1059,12 +1058,6 @@ def _resolve_rust_frontend_path() -> str | None:
+     "VLLM_MAX_N_SEQUENCES": lambda: int(
+         os.environ.get("VLLM_MAX_N_SEQUENCES", "16384")
+     ),
+-    # Maximum number of prompts allowed in a single /v1/completions request
+-    # when the prompt field is a list. Prevents unbounded fan-out of engine
+-    # requests from a single API call. Default: 1024.
+-    "VLLM_MAX_COMPLETION_PROMPTS": lambda: int(
+-        os.environ.get("VLLM_MAX_COMPLETION_PROMPTS", "1024")
+-    ),
+     # a list of plugin names to load, separated by commas.
+     # if this is not set, it means all plugins will be loaded
+     # if this is set to an empty string, no plugins will be loaded
