@@ -45,6 +45,17 @@ def existing_ids(dataset_dir: str | Path) -> set[str]:
     return {record.id for record in load_records(dataset_dir)}
 
 
+def update_record(dataset_dir: str | Path, updated: BenchmarkRecord) -> None:
+    """Replace one record in the JSONL file (used by label confirmation)."""
+    records_path, _ = dataset_paths(dataset_dir)
+    records = load_records(dataset_dir)
+    if updated.id not in {r.id for r in records}:
+        raise KeyError(f"record {updated.id} not found in {dataset_dir}")
+    with records_path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write((updated if record.id == updated.id else record).model_dump_json() + "\n")
+
+
 def composition(records: list[BenchmarkRecord]) -> dict:
     """Counts used by ``guardian-bench stats`` and the dataset README."""
     return {

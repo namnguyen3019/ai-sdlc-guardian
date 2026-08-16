@@ -70,6 +70,22 @@ class GitHubClient:
         return json.loads(raw.decode("utf-8")) if raw else {}
 
     # ------------------------------------------------------------- pull requests
+    def list_pulls(
+        self,
+        repository: str,
+        state: str = "closed",
+        per_page: int = 100,
+        page: int = 1,
+        direction: str = "asc",
+    ) -> list[dict]:
+        data = self._json(
+            "GET",
+            f"/repos/{repository}/pulls?state={state}&per_page={per_page}&page={page}"
+            f"&sort=created&direction={direction}",
+        )
+        assert isinstance(data, list)
+        return data
+
     def get_pr(self, repository: str, pr_number: int) -> dict:
         data = self._json("GET", f"/repos/{repository}/pulls/{pr_number}")
         assert isinstance(data, dict)

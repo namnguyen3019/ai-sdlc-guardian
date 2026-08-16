@@ -14,10 +14,16 @@ import os
 import sys
 import urllib.request
 
-from guardian.benchmark import osv
-from guardian.benchmark.dataset import composition, existing_ids, load_records, save_record
+from guardian.benchmark import mining, osv
+from guardian.benchmark.dataset import (
+    composition,
+    existing_ids,
+    load_records,
+    save_record,
+    update_record,
+)
 from guardian.benchmark.runner import DEFAULT_THRESHOLD, Arm, evaluate, save_results
-from guardian.benchmark.schema import Split
+from guardian.benchmark.schema import BenchmarkCategory, LabelStatus, Split
 from guardian.benchmark.validate import validate_dataset
 from guardian.github.client import GitHubClient
 from guardian.models.env import config_from_env
@@ -74,6 +80,46 @@ def cmd_fetch_osv(args: argparse.Namespace) -> int:
     for record, diff_text in collected:
         save_record(args.dataset, record, diff_text)
     print(f"saved {len(collected)} new confirmed security records to {args.dataset}")
+    return 0
+
+
+def cmd_mine(args: argparse.Namespace) -> int:
+    token = _github_token(args)
+    collected = mining.collect_mined_records(
+        GitHubClient(token),
+        args.repo,
+        limit=args.limit,
+        skip_ids=existing_ids(args.dataset),
+        min_age_days=args.min_age_days,
+        max_pages=args.pages,
+    )
+    for record, diff_text in collected:
+        save_record(args.dataset, record, diff_text)
+    print(f"saved {len(collected)} CANDIDATE records from {args.repo} to {args.dataset}")
+    print("promote after human review: guardian-bench confirm --dataset ... --id ... --reviewed-by ...")
+    return 0
+
+
+def cmd_confirm(args: argparse.Namespace) -> int:
+    records = {r.id: r for r in load_records(args.dataset)}
+    if args.id not in records:
+        print(f"no record with id {args.id}", file=sys.stderr)
+        return 1
+    record = records[args.id]
+    record.label_status = LabelStatus.CONFIRMED
+    record.is_risky = args.risky
+    if args.category:
+        record.category = BenchmarkCategory(args.category)
+    from datetime import date
+
+    verdict = "risky" if args.risky else "not risky"
+    record.notes = (record.notes + " " if record.notes else "") + (
+        f"[confirmed {verdict} by {args.reviewed_by} on {date.today().isoformat()}"
+        + (f": {args.reason}" if args.reason else "")
+        + "]"
+    )
+    update_record(args.dataset, record)
+    print(f"{record.id}: confirmed {verdict} (category {record.category.value}) by {args.reviewed_by}")
     return 0
 
 
@@ -138,6 +184,28 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--pages", type=int, default=3, help="Advisory index pages to scan (100/page)")
     fetch.add_argument("--token", help="GitHub token (defaults to GITHUB_TOKEN env)")
     fetch.set_defaults(func=cmd_fetch_osv)
+
+    mine = sub.add_parser("mine", help="Mine merged PRs into CANDIDATE records")
+    mine.add_argument("--dataset", required=True)
+    mine.add_argument("--repo", required=True, help="Repository to mine, e.g. psf/requests")
+    mine.add_argument("--limit", type=int, default=15)
+    mine.add_argument("--min-age-days", type=int, default=180,
+                      help="Only PRs merged at least this long ago (survival evidence)")
+    mine.add_argument("--pages", type=int, default=3, help="PR list pages to scan (100/page, oldest first)")
+    mine.add_argument("--token", help="GitHub token (defaults to GITHUB_TOKEN env)")
+    mine.set_defaults(func=cmd_mine)
+
+    confirm = sub.add_parser("confirm", help="Promote a CANDIDATE record after human review")
+    confirm.add_argument("--dataset", required=True)
+    confirm.add_argument("--id", required=True, help="Record id to confirm")
+    confirm.add_argument("--reviewed-by", required=True, help="Who reviewed this record")
+    risky_group = confirm.add_mutually_exclusive_group(required=True)
+    risky_group.add_argument("--risky", action="store_true", dest="risky")
+    risky_group.add_argument("--not-risky", action="store_false", dest="risky")
+    confirm.add_argument("--category", choices=[c.value for c in BenchmarkCategory],
+                         help="Override the suggested category")
+    confirm.add_argument("--reason", help="Short justification recorded in the record notes")
+    confirm.set_defaults(func=cmd_confirm)
 
     validate = sub.add_parser("validate", help="Validate a dataset directory")
     validate.add_argument("--dataset", required=True)
