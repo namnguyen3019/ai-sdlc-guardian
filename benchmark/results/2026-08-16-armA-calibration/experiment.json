@@ -1,0 +1,68 @@
+{
+  "arm": "A",
+  "arm_name": "deterministic",
+  "engine_version": "0.1.0",
+  "threshold": 31,
+  "split": "calibration",
+  "dataset_dir": "benchmark/datasets/main",
+  "dataset_composition": {
+    "total": 20,
+    "by_category": {
+      "security": 20
+    },
+    "by_source": {
+      "curated_osv": 20
+    },
+    "by_label_status": {
+      "confirmed": 20
+    },
+    "by_split": {
+      "calibration": 20
+    },
+    "risky": 20,
+    "not_risky": 0
+  },
+  "model_id": null,
+  "config": {
+    "weights": {
+      "security": 0.3,
+      "testing": 0.25,
+      "change_impact": 0.2,
+      "complexity": 0.15,
+      "ai_risk": 0.1
+    },
+    "severity_points": {
+      "LOW": 6,
+      "MEDIUM": 14,
+      "HIGH": 28,
+      "CRITICAL": 45
+    },
+    "critical_module_patterns": [],
+    "large_pr_lines": 500,
+    "very_large_pr_lines": 1000,
+    "large_pr_files": 20,
+    "untested_source_lines": 30,
+    "ai_enabled": false,
+    "bedrock_model_id": "anthropic.claude-sonnet-5",
+    "bedrock_region": "us-east-1",
+    "ai_max_tokens": 4096,
+    "ai_temperature": 0.0,
+    "ai_max_retries": 3,
+    "ai_max_diff_chars": 60000,
+    "ai_prompt_caching": true,
+    "ai_escalation_gate": false,
+    "ai_gate_max_deterministic_score": 20,
+    "ai_gate_max_churn": 100,
+    "ai_price_per_mtok_input": 3.0,
+    "ai_price_per_mtok_output": 15.0,
+    "ai_price_per_mtok_cache_read": 0.3,
+    "dynamodb_table": "guardian-analyses",
+    "reports_bucket": "",
+    "metrics_namespace": "AiSdlcGuardian",
+    "github_api_url": "https://api.github.com",
+    "github_secret_arn": "",
+    "state_machine_arn": "",
+    "webhook_dedup_ttl_seconds": 604800,
+    "comment_max_chars": 60000
+  }
+}

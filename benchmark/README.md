@@ -1,9 +1,12 @@
 # Benchmark framework
 
-**Status: dataset collection in progress.** The pipeline (schema, fetcher,
-validator, splits) is built and tested; a 25-record confirmed seed batch is
-committed. **No evaluation has been run yet — all comparison results are
-pending.** Nothing in this repository reports fabricated numbers.
+**Status: dataset collection in progress; first baseline measured.** The
+pipeline (schema, fetcher, validator, splits, evaluation runner) is built and
+tested; a 25-record confirmed seed batch is committed, and the free
+deterministic arm has been run on its calibration split (results below).
+**Arms B/C/D (the model-invoking arms) have not been run — the hybrid
+comparison is pending.** Nothing in this repository reports fabricated
+numbers.
 
 ## Dataset
 
@@ -65,12 +68,42 @@ rule on splits).
 - ~50 mined low-risk records (merged, lines untouched ≥6 months)
 - Balance check across categories before freezing v1 of the dataset
 
-## Evaluation plan (next step)
+## Evaluation
 
 Four arms on identical inputs: **A** deterministic-only · **B** LLM-only ·
 **C** hybrid (default) · **D** gated hybrid (`ai_escalation_gate=true`).
-Metrics: precision, recall, F1, FP/FN rate, latency, cost per analysis —
-computed on the holdout only, reported with confidence intervals, exported
-to JSON and CSV under `results/<experiment-id>/` together with the exact
-engine version, config, and model id. Bedrock batch inference (50% cheaper)
-for the offline runs.
+
+```bash
+guardian-bench evaluate --dataset benchmark/datasets/main --arm A \
+  --split calibration --output benchmark/results/<experiment-id>
+```
+
+Only CONFIRMED records are evaluated; a PR counts as flagged at risk ≥ 31
+(the MEDIUM boundary, `--threshold` to vary). Each results directory holds
+`experiment.json` (engine version, full config, model id, dataset
+composition), `metrics.json` (with 95% Wilson intervals), and per-record
+`outcomes.jsonl`/`outcomes.csv` — every published number is regenerable.
+Metrics with empty denominators report `null`, never a fake 0 or 1.
+
+### Real results so far
+
+**Arm A (deterministic-only), calibration split of the seed batch, threshold
+31 — [results/2026-08-16-armA-calibration](results/2026-08-16-armA-calibration/):**
+
+| Metric | Value | 95% CI |
+|---|---|---|
+| Recall | **0.15** (3/20) | [0.05, 0.36] |
+| False-negative rate | 0.85 | [0.64, 0.95] |
+| Precision | 1.0 | [0.44, 1.0] — no negatives in this batch, weak evidence |
+| False-positive rate | n/a | undefined: the seed batch has no low-risk records yet |
+| Mean latency | 3.5 ms | — |
+| Cost | $0 | no model calls |
+
+Reading: pattern rules catch 3 of 20 real reversed CVEs. This is the
+expected weakness of static-only review on vulnerability classes that are
+not regex-shaped, measured rather than assumed — and it is the gap arms
+B/C/D exist to close. Per protocol, rules are *not* tuned against these
+records. The FPR column stays empty until mined low-risk records land.
+
+The holdout split remains untouched. Bedrock batch inference (50% cheaper)
+is planned for the paid offline runs.

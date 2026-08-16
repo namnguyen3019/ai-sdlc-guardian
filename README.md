@@ -242,10 +242,13 @@ Nothing in this repository reports fabricated numbers.
 - 127 tests, ~97% coverage; CI enforces an 80% floor. All AWS, GitHub, and
   model calls are mocked or stub-driven — no test touches the network.
 
-**Not built yet**
+**Not built yet / in progress**
 
-- No benchmark data — **all evaluation results are pending**; nothing here
-  reports fabricated numbers.
+- Benchmark: the dataset pipeline, a 25-record confirmed seed batch, and the
+  evaluation runner exist; the free deterministic baseline is measured
+  (recall 0.15 on real reversed CVEs — see `benchmark/README.md`). The
+  model-invoking arms (LLM-only, hybrid, gated) and the full ~200-record
+  dataset are **pending**; nothing here reports fabricated numbers.
 - No dashboard (`frontend/` is a placeholder).
 
 ### Delivery plan
