@@ -16,8 +16,11 @@ import urllib.request
 
 from guardian.benchmark import osv
 from guardian.benchmark.dataset import composition, existing_ids, load_records, save_record
+from guardian.benchmark.runner import DEFAULT_THRESHOLD, Arm, evaluate, save_results
+from guardian.benchmark.schema import Split
 from guardian.benchmark.validate import validate_dataset
 from guardian.github.client import GitHubClient
+from guardian.models.env import config_from_env
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("guardian-bench")
@@ -90,6 +93,40 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    arm = Arm(args.arm)
+    provider = None
+    if arm.needs_provider:
+        # Paid arms call Bedrock for every record — make that explicit.
+        from guardian.bedrock.client import BedrockProvider
+
+        config = config_from_env()
+        if args.model:
+            config.bedrock_model_id = args.model
+        provider = BedrockProvider(config)
+        logger.warning(
+            "arm %s invokes Bedrock model %s per record — this incurs cost",
+            arm.value, config.bedrock_model_id,
+        )
+    else:
+        config = config_from_env()
+
+    split = Split(args.split) if args.split != "all" else None
+    results = evaluate(
+        args.dataset,
+        arm,
+        provider=provider,
+        split=split,
+        threshold=args.threshold,
+        limit=args.limit,
+        base_config=config,
+    )
+    save_results(results, args.output)
+    print(json.dumps(results["metrics"], indent=2))
+    print(f"results written to {args.output}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="guardian-bench", description="Benchmark dataset tooling")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -109,6 +146,20 @@ def main(argv: list[str] | None = None) -> int:
     stats = sub.add_parser("stats", help="Print dataset composition")
     stats.add_argument("--dataset", required=True)
     stats.set_defaults(func=cmd_stats)
+
+    evaluate_parser = sub.add_parser("evaluate", help="Run one benchmark arm over the dataset")
+    evaluate_parser.add_argument("--dataset", required=True)
+    evaluate_parser.add_argument("--arm", required=True, choices=[a.value for a in Arm],
+                                 help="A=deterministic, B=LLM-only, C=hybrid, D=gated hybrid")
+    evaluate_parser.add_argument("--output", required=True, help="Results directory")
+    evaluate_parser.add_argument("--split", default="calibration",
+                                 choices=["calibration", "holdout", "all"],
+                                 help="holdout is reserved for the final run")
+    evaluate_parser.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD,
+                                 help="Risk score at/above which a PR counts as flagged")
+    evaluate_parser.add_argument("--limit", type=int, help="Evaluate at most N records (smoke runs)")
+    evaluate_parser.add_argument("--model", help="Override Bedrock model id (arms B/C/D)")
+    evaluate_parser.set_defaults(func=cmd_evaluate)
 
     args = parser.parse_args(argv)
     return args.func(args)

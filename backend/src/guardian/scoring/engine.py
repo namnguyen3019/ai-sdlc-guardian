@@ -93,6 +93,10 @@ class RiskScoringEngine:
         if not ai_enabled:
             raw.pop("ai_risk")
         total = sum(raw.values())
+        if total <= 0:
+            # All weight sat on unavailable dimensions (e.g. an LLM-only
+            # configuration with AI down) — no signal, score 0, not a crash.
+            return {}
         return {k: v / total for k, v in raw.items()}
 
     @staticmethod
