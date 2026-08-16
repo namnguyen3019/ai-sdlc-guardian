@@ -61,11 +61,22 @@ classes). That gap is the phenomenon the hybrid comparison is designed to
 measure — not a reason to tune rules against the dataset (see protocol
 rule on splits).
 
+### Mined candidates (2026-08-16)
+
+25 mined records from psf/requests and pallets/flask (merged ≥180 days ago —
+survival is the low-risk evidence, deliberately **not** Guardian's own score,
+which would make the false-positive rate circular). They span
+normal/api/testing/database/auth categories and sit at `candidate` until
+promoted via `guardian-bench confirm` — see
+[datasets/main/REVIEW-CANDIDATES.md](datasets/main/REVIEW-CANDIDATES.md)
+for the review sheet. Evaluation refuses them until then, so the FPR column
+stays empty until review happens.
+
 ### Still to collect (target ≈200)
 
 - ~40 bug records (SWE-bench / BugsInPy fix reversals)
-- ~50 mined auth/database/API/testing records (candidate → human-confirmed)
-- ~50 mined low-risk records (merged, lines untouched ≥6 months)
+- ~40 more mined auth/database/API/testing records
+- ~40 more mined low-risk records
 - Balance check across categories before freezing v1 of the dataset
 
 ## Evaluation

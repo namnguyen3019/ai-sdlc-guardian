@@ -1,0 +1,22 @@
+diff --git a/requests/core.py b/requests/core.py
+index a685e37988..252d8b6b67 100644
+--- a/requests/core.py
++++ b/requests/core.py
+@@ -111,7 +111,7 @@ def _get_opener(self):
+ 
+         _handlers = []
+ 
+-        if self.cookiejar:
++        if self.cookiejar is not None:
+             _handlers.append(urllib2.HTTPCookieProcessor(self.cookiejar))
+ 
+         if self.auth:
+@@ -189,7 +189,7 @@ def send(self, anyway=False):
+                 opener = self._get_opener()
+                 resp = opener(req)
+ 
+-                if self.cookiejar:
++                if self.cookiejar is not None:
+                     self.cookiejar.extract_cookies(resp, req)
+                     
+             except urllib2.HTTPError, why:

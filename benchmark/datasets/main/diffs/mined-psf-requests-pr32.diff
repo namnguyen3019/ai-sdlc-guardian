@@ -1,0 +1,96 @@
+diff --git a/requests/__init__.py b/requests/__init__.py
+index cf171f50a4..d1e752741a 100644
+--- a/requests/__init__.py
++++ b/requests/__init__.py
+@@ -10,22 +10,26 @@
+ timeout = None
+ 
+ class settings:
+-    """Context manager for settings."""
+     
+-    cache = {}
+-    
+-    def __init__(self, timeout):
+-        self.module = inspect.getmodule(self)
+-        
+-        # Cache settings
+-        self.cache['timeout'] = self.module.timeout
+-        
+-        self.module.timeout = timeout
++    def __init__(self, **settings):
++        self._cache_settings(**settings)
++        self._alter_settings(**settings)
+         
+     def __enter__(self):
+         pass
+         
+     def __exit__(self, type, value, traceback):
+-        # Restore settings 
+-        for key in self.cache:
+-            setattr(self.module, key, self.cache[key])
++        self._restore_settings()
++        
++    def _cache_settings(self, **settings):
++        self.cache = {}
++        for setting in settings:
++            self.cache[setting] = globals()[setting]
++        
++    def _alter_settings(self, **settings):
++        for setting, value in settings.items():
++            globals()[setting] = value
++        
++    def _restore_settings(self):
++        for setting, value in self.cache.items():
++            globals()[setting] = value
+\ No newline at end of file
+diff --git a/requests/models.py b/requests/models.py
+index b6650b01d0..e1be07a834 100644
+--- a/requests/models.py
++++ b/requests/models.py
+@@ -47,20 +47,16 @@ def __init__(self, url=None, headers=dict(), files=None, method=None,
+         #: True if :class:`Request <models.Request>` is part of a redirect chain (disables history
+         #: and HTTPError storage).
+         self.redirect = redirect
+-
+-        # self.data = {}
++        
+         if hasattr(data, 'items'):
+             for (k, v) in data.items():
+                 self.data.update({
+                     k.encode('utf-8') if isinstance(k, unicode) else k:
+                     v.encode('utf-8') if isinstance(v, unicode) else v
+                 })
+-
+-        # url encode data if it's a dict
+-        if hasattr(data, 'items'):
+             self._enc_data = urllib.urlencode(self.data)
+         else:
+-            self._enc_data = data
++            self._enc_data = self.data = data
+ 
+         #: :class:`Response <models.Response>` instance, containing
+         #: content and metadata of HTTP Response, once :attr:`sent <send>`.
+diff --git a/test_requests.py b/test_requests.py
+index 4168672292..34c22bbcc2 100755
+--- a/test_requests.py
++++ b/test_requests.py
+@@ -155,6 +155,19 @@ def test_httpauth_recursion(self):
+ 
+         r = requests.get('https://convore.com/api/account/verify.json', auth=conv_auth)
+         self.assertEquals(r.status_code, 401)
++        
++    def test_settings(self):
++        import urllib2
++        
++        with requests.settings(timeout=0):
++            self.assertRaises(urllib2.URLError, requests.get, 'http://google.com')
++            
++        with requests.settings(timeout=10):
++            requests.get('http://google.com')
++            
++    def test_nonurlencoded_post_data(self):
++        requests.post('http://google.com', data='foo')
++        
+ 
+ 
+ if __name__ == '__main__':

@@ -1,0 +1,99 @@
+diff --git a/requests/__init__.py b/requests/__init__.py
+index d1e752741a..d44b2667a2 100644
+--- a/requests/__init__.py
++++ b/requests/__init__.py
+@@ -1,35 +1,6 @@
+ # -*- coding: utf-8 -*-
+ 
+-import inspect
+-
+ import packages
+ from core import *
+ 
+ from core import __version__
+-
+-timeout = None
+-
+-class settings:
+-    
+-    def __init__(self, **settings):
+-        self._cache_settings(**settings)
+-        self._alter_settings(**settings)
+-        
+-    def __enter__(self):
+-        pass
+-        
+-    def __exit__(self, type, value, traceback):
+-        self._restore_settings()
+-        
+-    def _cache_settings(self, **settings):
+-        self.cache = {}
+-        for setting in settings:
+-            self.cache[setting] = globals()[setting]
+-        
+-    def _alter_settings(self, **settings):
+-        for setting, value in settings.items():
+-            globals()[setting] = value
+-        
+-    def _restore_settings(self):
+-        for setting, value in self.cache.items():
+-            globals()[setting] = value
+\ No newline at end of file
+diff --git a/requests/api.py b/requests/api.py
+index 53577b4e86..987374f916 100644
+--- a/requests/api.py
++++ b/requests/api.py
+@@ -11,7 +11,7 @@
+ 
+ """
+ 
+-import requests
++import settings
+ from .models import Request, Response, AuthManager, AuthObject, auth_manager
+ 
+ 
+@@ -37,7 +37,8 @@ def request(method, url, **kwargs):
+     r = Request(method=method, url=url, data=data, headers=kwargs.pop('headers', {}),
+                 cookiejar=kwargs.pop('cookies', None), files=kwargs.pop('files', None),
+                 auth=kwargs.pop('auth', auth_manager.get_auth(url)),
+-                timeout=kwargs.pop('timeout', requests.timeout))
++                timeout=kwargs.pop('timeout', settings.timeout))
++    
+     r.send()
+ 
+     return r.response
+diff --git a/requests/core.py b/requests/core.py
+index fb239f2f64..073d231b7d 100644
+--- a/requests/core.py
++++ b/requests/core.py
+@@ -22,4 +22,4 @@
+ from models import HTTPError, auth_manager
+ from api import *
+ from exceptions import *
+-from settings import *
+\ No newline at end of file
++from settings import Settings as settings
+\ No newline at end of file
+diff --git a/requests/settings.py b/requests/settings.py
+index 00e27d62a1..1dc9007940 100644
+--- a/requests/settings.py
++++ b/requests/settings.py
+@@ -8,6 +8,9 @@
+ 
+ """
+ 
++# Time (in seconds) to allow the request to connect to
++# the remote host before timing it out.
++timeout = None
+ 
+ class Settings(object):
+ 
+@@ -33,7 +36,3 @@ def _alter_settings(self, **settings):
+     def _restore_settings(self):
+         for setting, value in self.cache.items():
+             globals()[setting] = value
+-
+-
+-settings = Settings
+-timeout = None
+\ No newline at end of file

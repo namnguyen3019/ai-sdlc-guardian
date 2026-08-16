@@ -1,0 +1,13 @@
+diff --git a/docs/patterns/packages.rst b/docs/patterns/packages.rst
+index e1b92c080d..28cd70e484 100644
+--- a/docs/patterns/packages.rst
++++ b/docs/patterns/packages.rst
+@@ -57,7 +57,7 @@ following quick checklist:
+ 2. all the view functions (the ones with a :meth:`~flask.Flask.route`
+    decorator on top) have to be imported when in the `__init__.py` file.
+    Not the object itself, but the module it is in. Import the view module
+-   *after the application object is created*.
++   **after the application object is created**.
+ 
+ Here's an example `__init__.py`::
+ 

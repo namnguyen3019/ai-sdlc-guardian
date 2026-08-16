@@ -1,0 +1,176 @@
+diff --git a/docs/api.rst b/docs/api.rst
+index 50c9820d55..fb604abf7c 100644
+--- a/docs/api.rst
++++ b/docs/api.rst
+@@ -40,24 +40,24 @@ Incoming Request Data
+ 
+    This is a proxy.  See :ref:`notes-on-proxies` for more information.
+ 
+-   The request object is an instance of a :class:`~werkzeug.Request`
++   The request object is an instance of a :class:`~werkzeug.wrappers.Request`
+    subclass and provides all of the attributes Werkzeug defines.  This
+    just shows a quick overview of the most important ones.
+ 
+    .. attribute:: form
+ 
+-      A :class:`~werkzeug.MultiDict` with the parsed form data from `POST`
++      A :class:`~werkzeug.datastructures.MultiDict` with the parsed form data from `POST`
+       or `PUT` requests.  Please keep in mind that file uploads will not
+       end up here,  but instead in the :attr:`files` attribute.
+ 
+    .. attribute:: args
+ 
+-      A :class:`~werkzeug.MultiDict` with the parsed contents of the query
++      A :class:`~werkzeug.datastructures.MultiDict` with the parsed contents of the query
+       string.  (The part in the URL after the question mark).
+ 
+    .. attribute:: values
+ 
+-      A :class:`~werkzeug.CombinedMultiDict` with the contents of both
++      A :class:`~werkzeug.datastructures.CombinedMultiDict` with the contents of both
+       :attr:`form` and :attr:`args`.
+ 
+    .. attribute:: cookies
+@@ -79,11 +79,11 @@ Incoming Request Data
+ 
+    .. attribute:: files
+ 
+-      A :class:`~werkzeug.MultiDict` with files uploaded as part of a
++      A :class:`~werkzeug.datastructures.MultiDict` with files uploaded as part of a
+       `POST` or `PUT` request.  Each file is stored as
+-      :class:`~werkzeug.FileStorage` object.  It basically behaves like a
++      :class:`~werkzeug.datastructures.FileStorage` object.  It basically behaves like a
+       standard file object you know from Python, with the difference that
+-      it also has a :meth:`~werkzeug.FileStorage.save` function that can
++      it also has a :meth:`~werkzeug.datastructures.FileStorage.save` function that can
+       store the file on the filesystem.
+ 
+    .. attribute:: environ
+@@ -228,7 +228,7 @@ Useful Functions and Classes
+ 
+ .. function:: abort(code)
+ 
+-   Raises an :exc:`~werkzeug.exception.HTTPException` for the given
++   Raises an :exc:`~werkzeug.exceptions.HTTPException` for the given
+    status code.  For example to abort request handling with a page not
+    found exception, you would call ``abort(404)``.
+ 
+@@ -308,7 +308,7 @@ Useful Internals
+ 
+ .. data:: _request_ctx_stack
+ 
+-   The internal :class:`~werkzeug.LocalStack` that is used to implement
++   The internal :class:`~werkzeug.local.LocalStack` that is used to implement
+    all the context local objects used in Flask.  This is a documented
+    instance and can be used by extensions and application code but the
+    use is discouraged in general.
+@@ -435,7 +435,7 @@ exceptions where it is good to know that this object is an actual proxy:
+     :ref:`signals`)
+ 
+ If you need to get access to the underlying object that is proxied, you
+-can use the :meth:`~werkzeug.LocalProxy._get_current_object` method::
++can use the :meth:`~werkzeug.local.LocalProxy._get_current_object` method::
+ 
+     app = current_app._get_current_object()
+     my_signal.send(app)
+diff --git a/docs/patterns/fileuploads.rst b/docs/patterns/fileuploads.rst
+index 221ce327b5..23d6c6bbe0 100644
+--- a/docs/patterns/fileuploads.rst
++++ b/docs/patterns/fileuploads.rst
+@@ -10,7 +10,7 @@ uploads is actually quite simple.  It basically works like this:
+    and an ``<input type=file>`` is placed in that form.
+ 2. The application accesses the file from the :attr:`~flask.request.files`
+    dictionary on the request object.
+-3. use the :meth:`~werkzeug.FileStorage.save` method of the file to save
++3. use the :meth:`~werkzeug.datastructures.FileStorage.save` method of the file to save
+    the file permanently somewhere on the filesystem.
+ 
+ A Gentle Introduction
+@@ -71,7 +71,7 @@ the file and redirects the user to the URL for the uploaded file::
+         </form>
+         '''
+ 
+-So what does that :func:`~werkzeug.secure_filename` function actually do?
++So what does that :func:`~werkzeug.utils.secure_filename` function actually do?
+ Now the problem is that there is that principle called "never trust user
+ input".  This is also true for the filename of an uploaded file.  All
+ submitted form data can be forged, and filenames can be dangerous.  For
+@@ -80,7 +80,7 @@ before storing it directly on the filesystem.
+ 
+ .. admonition:: Information for the Pros
+ 
+-   So you're interested in what that :func:`~werkzeug.secure_filename`
++   So you're interested in what that :func:`~werkzeug.utils.secure_filename`
+    function does and what the problem is if you're not using it?  So just
+    imagine someone would send the following information as `filename` to
+    your application::
+@@ -109,7 +109,7 @@ Flask 0.5 we can use a function that does that for us::
+                                    filename)
+ 
+ Alternatively you can register `uploaded_file` as `build_only` rule and
+-use the :class:`~werkzeug.SharedDataMiddleware`.  This also works with
++use the :class:`~werkzeug.wsgi.SharedDataMiddleware`.  This also works with
+ older versions of Flask::
+ 
+     from werkzeug import SharedDataMiddleware
+diff --git a/docs/patterns/jquery.rst b/docs/patterns/jquery.rst
+index 462858644e..d4fe6d4e1c 100644
+--- a/docs/patterns/jquery.rst
++++ b/docs/patterns/jquery.rst
+@@ -108,7 +108,7 @@ template.  This template will load jQuery as above and have a little form
+ we can add two numbers and a link to trigger the function on the server
+ side.
+ 
+-Note that we are using the :meth:`~werkzeug.MultiDict.get` method here
++Note that we are using the :meth:`~werkzeug.datastructures.MultiDict.get` method here
+ which will never fail.  If the key is missing a default value (here ``0``)
+ is returned.  Furthermore it can convert values to a specific type (like
+ in our case `int`).  This is especially handy for code that is
+diff --git a/docs/quickstart.rst b/docs/quickstart.rst
+index c115fa7082..b4f6027fae 100644
+--- a/docs/quickstart.rst
++++ b/docs/quickstart.rst
+@@ -548,7 +548,7 @@ filesystem.  You can access those files by looking at the
+ :attr:`~flask.request.files` attribute on the request object.  Each
+ uploaded file is stored in that dictionary.  It behaves just like a
+ standard Python :class:`file` object, but it also has a
+-:meth:`~werkzeug.FileStorage.save` method that allows you to store that
++:meth:`~werkzeug.datastructures.FileStorage.save` method that allows you to store that
+ file on the filesystem of the server.  Here is a simple example showing how
+ that works::
+ 
+@@ -563,10 +563,10 @@ that works::
+ 
+ If you want to know how the file was named on the client before it was
+ uploaded to your application, you can access the
+-:attr:`~werkzeug.FileStorage.filename` attribute.  However please keep in
++:attr:`~werkzeug.datastructures.FileStorage.filename` attribute.  However please keep in
+ mind that this value can be forged so never ever trust that value.  If you
+ want to use the filename of the client to store the file on the server,
+-pass it through the :func:`~werkzeug.secure_filename` function that
++pass it through the :func:`~werkzeug.utils.secure_filename` function that
+ Werkzeug provides for you::
+ 
+     from flask import request
+diff --git a/docs/testing.rst b/docs/testing.rst
+index b9f0806b48..6c7b84285d 100644
+--- a/docs/testing.rst
++++ b/docs/testing.rst
+@@ -13,7 +13,7 @@ safely change things, and you will instantly know if your change broke
+ something.
+ 
+ Flask gives you a couple of ways to test applications.  It mainly does
+-that by exposing the Werkzeug test :class:`~werkzeug.Client` class to your
++that by exposing the Werkzeug test :class:`~werkzeug.test.Client` class to your
+ code and handling the context locals for you.  You can then use that with
+ your favourite testing solution.  In this documentation we will use the
+ :mod:`unittest` package that comes preinstalled with each Python
+@@ -110,7 +110,7 @@ Test functions begin with the word `test`.  Every function named like that
+ will be picked up automatically.  By using `self.app.get` we can send an
+ HTTP `GET` request to the application with the given path.  The return
+ value will be a :class:`~flask.Flask.response_class` object.  We can now
+-use the :attr:`~werkzeug.BaseResponse.data` attribute to inspect the
++use the :attr:`~werkzeug.wrappers.BaseResponse.data` attribute to inspect the
+ return value (as string) from the application.  In this case, we ensure
+ that ``'No entries here so far'`` is part of the output.
+ 

@@ -1,0 +1,49 @@
+diff --git a/requests/core.py b/requests/core.py
+index 3f599b18ab..c7726c22d6 100644
+--- a/requests/core.py
++++ b/requests/core.py
+@@ -30,7 +30,7 @@
+         pass
+ 
+ from .packages.poster.encode import multipart_encode
+-from .packages.poster.streaminghttp import register_openers
++from .packages.poster.streaminghttp import register_openers, get_handlers
+ 
+ 
+ __title__ = 'requests'
+@@ -124,6 +124,7 @@ def _get_opener(self):
+                 cookie_handler = urllib2.HTTPCookieProcessor(cookiejar)
+                 _handlers.append(cookie_handler)
+ 
++            _handlers += get_handlers()
+             opener = urllib2.build_opener(*_handlers)
+             return opener.open
+ 
+diff --git a/requests/packages/poster/streaminghttp.py b/requests/packages/poster/streaminghttp.py
+index 379d769d48..1b591d4b54 100644
+--- a/requests/packages/poster/streaminghttp.py
++++ b/requests/packages/poster/streaminghttp.py
+@@ -181,16 +181,18 @@ def https_request(self, req):
+             return urllib2.HTTPSHandler.do_request_(self, req)
+ 
+ 
++def get_handlers():
++    handlers = [StreamingHTTPHandler, StreamingHTTPRedirectHandler]
++    if hasattr(httplib, "HTTPS"):
++        handlers.append(StreamingHTTPSHandler)
++    return handlers
++    
+ def register_openers():
+     """Register the streaming http handlers in the global urllib2 default
+     opener object.
+ 
+     Returns the created OpenerDirector object."""
+-    handlers = [StreamingHTTPHandler, StreamingHTTPRedirectHandler]
+-    if hasattr(httplib, "HTTPS"):
+-        handlers.append(StreamingHTTPSHandler)
+-
+-    opener = urllib2.build_opener(*handlers)
++    opener = urllib2.build_opener(*get_handlers())
+ 
+     urllib2.install_opener(opener)
+ 
