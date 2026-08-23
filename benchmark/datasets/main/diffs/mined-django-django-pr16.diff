@@ -1,0 +1,96 @@
+diff --git a/django/core/management/commands/inspectdb.py b/django/core/management/commands/inspectdb.py
+index af2da451545b..10fd9bd46381 100644
+--- a/django/core/management/commands/inspectdb.py
++++ b/django/core/management/commands/inspectdb.py
+@@ -42,7 +42,7 @@ def handle_inspection(self, options):
+         yield 'from %s import models' % self.db_module
+         yield ''
+         known_models = []
+-        for table_name in connection.introspection.get_table_list(cursor):
++        for table_name in connection.introspection.table_names(cursor):
+             yield 'class %s(models.Model):' % table2model(table_name)
+             known_models.append(table2model(table_name))
+             try:
+diff --git a/django/core/management/sql.py b/django/core/management/sql.py
+index 454a3427aac3..68c72b3487ff 100644
+--- a/django/core/management/sql.py
++++ b/django/core/management/sql.py
+@@ -63,7 +63,7 @@ def sql_delete(app, style, connection):
+ 
+     # Figure out which tables already exist
+     if cursor:
+-        table_names = connection.introspection.get_table_list(cursor)
++        table_names = connection.introspection.table_names(cursor)
+     else:
+         table_names = []
+ 
+diff --git a/django/db/backends/__init__.py b/django/db/backends/__init__.py
+index 0d664d452a71..a85e7b984c6c 100644
+--- a/django/db/backends/__init__.py
++++ b/django/db/backends/__init__.py
+@@ -898,10 +898,23 @@ def table_name_converter(self, name):
+         """
+         return name
+ 
+-    def table_names(self):
+-        "Returns a list of names of all tables that exist in the database."
+-        cursor = self.connection.cursor()
+-        return self.get_table_list(cursor)
++    def table_names(self, cursor=None):
++        """
++        Returns a list of names of all tables that exist in the database.
++        The returned table list is sorted by Python's default sorting. We
++        do NOT use database's ORDER BY here to avoid subtle differences
++        in sorting order between databases.
++        """
++        if cursor is None:
++            cursor = self.connection.cursor()
++        return sorted(self.get_table_list(cursor))
++
++    def get_table_list(self, cursor):
++        """
++        Returns an unsorted list of names of all tables that exist in the
++        database.
++        """
++        raise NotImplementedError
+ 
+     def django_table_names(self, only_existing=False):
+         """
+diff --git a/django/db/backends/mysql/base.py b/django/db/backends/mysql/base.py
+index 6397a0972c21..1be7998c4990 100644
+--- a/django/db/backends/mysql/base.py
++++ b/django/db/backends/mysql/base.py
+@@ -454,7 +454,7 @@ def check_constraints(self, table_names=None):
+         """
+         cursor = self.cursor()
+         if table_names is None:
+-            table_names = self.introspection.get_table_list(cursor)
++            table_names = self.introspection.table_names(cursor)
+         for table_name in table_names:
+             primary_key_column_name = self.introspection.get_primary_key_column(cursor, table_name)
+             if not primary_key_column_name:
+diff --git a/django/db/backends/sqlite3/base.py b/django/db/backends/sqlite3/base.py
+index 0b19442e78ea..8f883e2dc3a5 100644
+--- a/django/db/backends/sqlite3/base.py
++++ b/django/db/backends/sqlite3/base.py
+@@ -295,7 +295,7 @@ def check_constraints(self, table_names=None):
+         """
+         cursor = self.cursor()
+         if table_names is None:
+-            table_names = self.introspection.get_table_list(cursor)
++            table_names = self.introspection.table_names(cursor)
+         for table_name in table_names:
+             primary_key_column_name = self.introspection.get_primary_key_column(cursor, table_name)
+             if not primary_key_column_name:
+diff --git a/tests/regressiontests/introspection/tests.py b/tests/regressiontests/introspection/tests.py
+index 3bd9d60fa273..b425b6401df9 100644
+--- a/tests/regressiontests/introspection/tests.py
++++ b/tests/regressiontests/introspection/tests.py
+@@ -40,6 +40,7 @@ class IntrospectionTests(TestCase):
+ 
+     def test_table_names(self):
+         tl = connection.introspection.table_names()
++        self.assertEqual(tl, sorted(tl))
+         self.assertTrue(Reporter._meta.db_table in tl,
+                      "'%s' isn't in table_list()." % Reporter._meta.db_table)
+         self.assertTrue(Article._meta.db_table in tl,

@@ -1,0 +1,12 @@
+diff --git a/AUTHORS b/AUTHORS
+index e3aec98d94cc..db6ce11b3489 100644
+--- a/AUTHORS
++++ b/AUTHORS
+@@ -478,6 +478,7 @@ answer newbie questions, and generally made Django that much better:
+     Warren Smith <warren@wandrsmith.net>
+     smurf@smurf.noris.de
+     Vsevolod Solovyov
++    George Song <george@damacy.net>
+     sopel
+     Leo Soto <leo.soto@gmail.com>
+     Wiliam Alves de Souza <wiliamsouza83@gmail.com>

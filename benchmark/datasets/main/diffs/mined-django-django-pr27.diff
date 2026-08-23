@@ -1,0 +1,12 @@
+diff --git a/AUTHORS b/AUTHORS
+index e3aec98d94cc..5943a272d8c0 100644
+--- a/AUTHORS
++++ b/AUTHORS
+@@ -433,6 +433,7 @@ answer newbie questions, and generally made Django that much better:
+     Philippe Raoult <philippe.raoult@n2nsoft.com>
+     Massimiliano Ravelli <massimiliano.ravelli@gmail.com>
+     Brian Ray <http://brianray.chipy.org/>
++    Lee Reilly <lee@leereilly.net>
+     Łukasz Rekucki <lrekucki@gmail.com>
+     remco@diji.biz
+     Marc Remolt <m.remolt@webmasters.de>

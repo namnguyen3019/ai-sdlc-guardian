@@ -1,0 +1,13 @@
+diff --git a/django/contrib/admin/templates/admin/base.html b/django/contrib/admin/templates/admin/base.html
+index 3ebec911ed8c..caa26744d49d 100644
+--- a/django/contrib/admin/templates/admin/base.html
++++ b/django/contrib/admin/templates/admin/base.html
+@@ -34,7 +34,7 @@
+                 {% endif %}
+                 {% if user.has_usable_password %}
+                 <a href="{% url 'admin:password_change' %}">{% trans 'Change password' %}</a> /
+-                {% endif $}
++                {% endif %}
+                 <a href="{% url 'admin:logout' %}">{% trans 'Log out' %}</a>
+             {% endblock %}
+         </div>

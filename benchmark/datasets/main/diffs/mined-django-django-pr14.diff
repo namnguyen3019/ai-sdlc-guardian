@@ -1,0 +1,13 @@
+diff --git a/django/views/i18n.py b/django/views/i18n.py
+index 140dc543e3d5..5d1ecb99ea29 100644
+--- a/django/views/i18n.py
++++ b/django/views/i18n.py
+@@ -125,7 +125,7 @@ def get_formats():
+ function get_format(format_type) {
+     var value = formats[format_type];
+     if (typeof(value) == 'undefined') {
+-      return msgid;
++      return format_type;
+     } else {
+       return value;
+     }

@@ -1,0 +1,13 @@
+diff --git a/docs/howto/static-files.txt b/docs/howto/static-files.txt
+index e3a40a1a2211..29a2c2f6e29e 100644
+--- a/docs/howto/static-files.txt
++++ b/docs/howto/static-files.txt
+@@ -424,7 +424,7 @@ Here's how this might look in a fabfile::
+     @roles('static')
+     def deploy_static():
+         local('./manage.py collectstatic')
+-        project.rysnc_project(
++        project.rsync_project(
+             remote_dir = env.remote_static_root,
+             local_dir = env.local_static_root,
+             delete = True
