@@ -14,7 +14,7 @@ import os
 import sys
 import urllib.request
 
-from guardian.benchmark import mining, osv
+from guardian.benchmark import mining, osv, swebench
 from guardian.benchmark.dataset import (
     composition,
     existing_ids,
@@ -80,6 +80,24 @@ def cmd_fetch_osv(args: argparse.Namespace) -> int:
     for record, diff_text in collected:
         save_record(args.dataset, record, diff_text)
     print(f"saved {len(collected)} new confirmed security records to {args.dataset}")
+    return 0
+
+
+def cmd_fetch_swebench(args: argparse.Namespace) -> int:
+    license_lookup = None
+    token = args.token or os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        github = GitHubClient(token)
+        license_lookup = github.get_repo_license
+    collected = swebench.collect_bug_records(
+        limit=args.limit,
+        skip_ids=existing_ids(args.dataset),
+        offset=args.offset,
+        license_lookup=license_lookup,
+    )
+    for record, diff_text in collected:
+        save_record(args.dataset, record, diff_text)
+    print(f"saved {len(collected)} new confirmed bug records to {args.dataset}")
     return 0
 
 
@@ -184,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--pages", type=int, default=3, help="Advisory index pages to scan (100/page)")
     fetch.add_argument("--token", help="GitHub token (defaults to GITHUB_TOKEN env)")
     fetch.set_defaults(func=cmd_fetch_osv)
+
+    swb = sub.add_parser("fetch-swebench", help="Collect SWE-bench-backed bug records")
+    swb.add_argument("--dataset", required=True)
+    swb.add_argument("--limit", type=int, default=40)
+    swb.add_argument("--offset", type=int, default=0, help="Row offset into the SWE-bench test split")
+    swb.add_argument("--token", help="GitHub token for repo-license lookups (optional)")
+    swb.set_defaults(func=cmd_fetch_swebench)
 
     mine = sub.add_parser("mine", help="Mine merged PRs into CANDIDATE records")
     mine.add_argument("--dataset", required=True)

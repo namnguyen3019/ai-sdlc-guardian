@@ -1,0 +1,50 @@
+{
+  "records": 77,
+  "scored": 77,
+  "errored": 0,
+  "confusion": {
+    "tp": 3,
+    "fp": 0,
+    "tn": 27,
+    "fn": 47
+  },
+  "precision": 1.0,
+  "precision_ci95": [
+    0.4385,
+    1.0
+  ],
+  "recall": 0.06,
+  "recall_ci95": [
+    0.0206,
+    0.1622
+  ],
+  "f1": 0.1132,
+  "false_positive_rate": 0.0,
+  "false_positive_rate_ci95": [
+    0.0,
+    0.1246
+  ],
+  "false_negative_rate": 0.94,
+  "false_negative_rate_ci95": [
+    0.8378,
+    0.9794
+  ],
+  "accuracy": 0.3896,
+  "latency_ms": {
+    "mean": 1.0,
+    "median": 0,
+    "max": 61
+  },
+  "cost_usd": {
+    "total": 0.0,
+    "mean": 0.0
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0
+  },
+  "ai": {
+    "ran": 0,
+    "skipped_by_gate": 0
+  }
+}
