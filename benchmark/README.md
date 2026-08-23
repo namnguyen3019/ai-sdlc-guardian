@@ -122,5 +122,28 @@ Labeling disclosure: the 25 mined negatives were reviewed and confirmed by
 Claude under delegation, recorded per record and in
 [ADR-005](../docs/decisions/ADR-005-machine-labeling.md).
 
+**Arms B/C/D status — blocked on a Bedrock account gate.** The runner is
+complete and tested, and Haiku 4.5 is enabled on the deployment account, but
+production-style Converse calls return:
+
+> `ResourceNotFoundException: Model use case details have not been submitted
+> for this account. Fill out the Anthropic use case details form before using
+> the model.`
+
+This is a one-time per-account form in the Bedrock console (Model access →
+Anthropic use-case details); it cannot be automated. Once submitted, run:
+
+```bash
+guardian-bench evaluate --dataset benchmark/datasets/main --arm B \
+  --split calibration --model us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+  --output benchmark/results/<id>
+# then --arm C, --arm D; the holdout run comes last, once.
+```
+
+No partial model-arm numbers are published: the failed runs produced
+all-not-risky predictions (per-record AI failures are isolated by design), so
+their metrics were undefined and the result directories were discarded rather
+than committed as misleading data.
+
 The holdout split remains untouched. Bedrock batch inference (50% cheaper)
 is planned for the paid offline runs.

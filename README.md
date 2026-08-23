@@ -242,14 +242,16 @@ Nothing in this repository reports fabricated numbers.
 - 127 tests, ~97% coverage; CI enforces an 80% floor. All AWS, GitHub, and
   model calls are mocked or stub-driven — no test touches the network.
 
-**Not built yet / in progress**
+**In progress**
 
-- Benchmark: the dataset pipeline, a 25-record confirmed seed batch, and the
-  evaluation runner exist; the free deterministic baseline is measured
-  (recall 0.15 on real reversed CVEs — see `benchmark/README.md`). The
-  model-invoking arms (LLM-only, hybrid, gated) and the full ~200-record
-  dataset are **pending**; nothing here reports fabricated numbers.
-- No dashboard (`frontend/` is a placeholder).
+- Benchmark: dataset pipeline, a **105-record** confirmed dataset across all
+  seven categories, the four-arm evaluation runner, and a React dashboard all
+  exist. The deterministic baseline is measured (arm A: recall ~0.06, FPR
+  0.00 on the calibration split — precise but blind). The three model-invoking
+  arms (LLM-only / hybrid / gated) are **blocked on a one-time Bedrock
+  use-case form** for the deployment account — the runner works, the account
+  gate does not; see `benchmark/README.md`. Nothing here reports fabricated
+  numbers, and no partial model-arm results are published.
 
 ### Delivery plan
 
@@ -258,9 +260,17 @@ Nothing in this repository reports fabricated numbers.
 | Week 1 | Local engine: parser, 5 deterministic analyzers, scoring engine, CLI, CDK foundation | ✅ v0.1 |
 | Week 2 | Bedrock AI analyzer (evidence-grounded), Step Functions + Lambda, DynamoDB/S3, CloudWatch | ✅ v0.2 |
 | Week 3 | GitHub automation: signed webhook, auto-updating PR comments, Secrets Manager, dedup | ✅ v0.3 |
-| Week 4 | Evaluation + v1.0 | ⏳ next |
+| Week 4 | Benchmark pipeline + runner, 105-record dataset, dashboard; arm-A baseline | ✅ v0.4 |
+| — | Model arms B/C/D (blocked on Bedrock use-case form), grow dataset, v1.0 tag | ⏳ |
 
-**Week 4 — evaluation and v1.0 (next up)**
+**Remaining before v1.0**
+
+- Submit the Bedrock use-case form, then run arms B/C/D on calibration and,
+  once, the holdout — completing the hybrid comparison.
+- Grow the dataset toward ~200 (more mining + confirmation).
+- Tag v1.0.0 with release notes.
+
+**Original Week 4 plan (for reference)**
 
 - Benchmark framework over 100–300 labeled PRs in 7 categories; arms:
   (A) deterministic-only, (B) LLM-only, (C) hybrid, (D) gated hybrid.
