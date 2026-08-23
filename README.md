@@ -99,12 +99,15 @@ Details: [docs/architecture.md](docs/architecture.md).
 
 ## 5. Installation
 
+Requires **Python 3.11+** (3.12 is what CI runs).
+
 ```bash
 git clone https://github.com/your-org/ai-sdlc-guardian.git
 cd ai-sdlc-guardian/backend
-python3 -m venv .venv && source .venv/bin/activate
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip          # editable install needs pip >= 21.3
 pip install -e ".[dev]"
-pytest            # 106 tests, ~98% coverage; all AWS/Bedrock calls mocked
+pytest            # 180 tests; all AWS/GitHub/Bedrock calls mocked
 ```
 
 Analyze a PR diff locally:
