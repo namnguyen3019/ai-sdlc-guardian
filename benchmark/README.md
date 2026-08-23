@@ -98,23 +98,29 @@ Metrics with empty denominators report `null`, never a fake 0 or 1.
 
 ### Real results so far
 
-**Arm A (deterministic-only), calibration split of the seed batch, threshold
-31 — [results/2026-08-16-armA-calibration](results/2026-08-16-armA-calibration/):**
+**Arm A (deterministic-only), calibration split (37 records: 20 risky, 17
+benign), threshold 31 —
+[results/2026-08-16-armA-calibration-50](results/2026-08-16-armA-calibration-50/):**
 
 | Metric | Value | 95% CI |
 |---|---|---|
 | Recall | **0.15** (3/20) | [0.05, 0.36] |
+| False-positive rate | **0.00** (0/17) | [0.00, 0.18] |
+| Precision | 1.0 | [0.44, 1.0] |
 | False-negative rate | 0.85 | [0.64, 0.95] |
-| Precision | 1.0 | [0.44, 1.0] — no negatives in this batch, weak evidence |
-| False-positive rate | n/a | undefined: the seed batch has no low-risk records yet |
-| Mean latency | 3.5 ms | — |
-| Cost | $0 | no model calls |
+| F1 | 0.26 | — |
+| Mean latency / cost | ~4 ms / $0 | no model calls |
 
-Reading: pattern rules catch 3 of 20 real reversed CVEs. This is the
-expected weakness of static-only review on vulnerability classes that are
-not regex-shaped, measured rather than assumed — and it is the gap arms
-B/C/D exist to close. Per protocol, rules are *not* tuned against these
-records. The FPR column stays empty until mined low-risk records land.
+Reading: the deterministic arm is *precise but blind* — zero false alarms on
+benign changes, but it catches only 3 of 20 real reversed CVEs. That is the
+measured version of the usual static-analysis trade-off, and exactly the gap
+arms B/C/D exist to close. Per protocol, rules are not tuned against these
+records. (Earlier all-risky run preserved in
+`results/2026-08-16-armA-calibration/`.)
+
+Labeling disclosure: the 25 mined negatives were reviewed and confirmed by
+Claude under delegation, recorded per record and in
+[ADR-005](../docs/decisions/ADR-005-machine-labeling.md).
 
 The holdout split remains untouched. Bedrock batch inference (50% cheaper)
 is planned for the paid offline runs.
