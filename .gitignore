@@ -35,3 +35,7 @@ frontend/dist/
 
 # Benchmark artifacts (raw results are published intentionally, not by default)
 benchmark/results/raw/
+
+# Frontend build output & generated sample data
+frontend/dist/
+frontend/public/data.json
